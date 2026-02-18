@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "recruit-ai-platform"
-  }
+    "default": "recruitai-4fde9",
+    "recruitai": "recruitai-4fde9"
+  },
+  "targets": {},
+  "etags": {}
 }

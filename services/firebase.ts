@@ -6,7 +6,7 @@ import {
   deleteDoc,
   doc,
   getDocs,
-  getFirestore,
+  initializeFirestore,
   onSnapshot,
   orderBy,
   query,
@@ -17,7 +17,7 @@ import {
 /**
  * Konfiguracja Firebase.
  * Wartości są pobierane ze zmiennych środowiskowych.
- * Upewnij się, że zdefiniowałeś FIREBASE_API_KEY oraz inne wymagane klucze w swoim środowisku.
+ * Upewnij się, że zdefiniowałeś VITE_FIREBASE_API_KEY oraz inne wymagane klucze w swoim środowisku.
  */
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -30,16 +30,17 @@ const firebaseConfig = {
 
 // Sprawdzenie krytycznych zmiennych w celu ułatwienia debugowania
 if (!firebaseConfig.apiKey) {
-  console.error('BŁĄD: Brak FIREBASE_API_KEY. Skonfiguruj zmienne środowiskowe, aby logowanie działało.');
+  console.error('BŁĄD: Brak VITE_FIREBASE_API_KEY. Skonfiguruj zmienne środowiskowe, aby logowanie działało.');
 }
 if (!firebaseConfig.projectId) {
-  console.error('BŁĄD: Brak FIREBASE_PROJECT_ID. Skonfiguruj zmienne środowiskowe, aby baza danych działała.');
+  console.error('BŁĄD: Brak VITE_FIREBASE_PROJECT_ID. Skonfiguruj zmienne środowiskowe, aby baza danych działało.');
 }
 
 const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+export const db = initializeFirestore(app, {}, 'recruit-ai-db');
+
 export const googleProvider = new GoogleAuthProvider();
 
 export {

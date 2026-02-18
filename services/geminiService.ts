@@ -1,20 +1,19 @@
-
-import { GoogleGenAI, Type } from "@google/genai";
-import { InterviewSession, Question } from "../types";
+import { GoogleGenAI, Type } from '@google/genai';
+import { InterviewSession, Question } from '../types';
 
 export async function generateInterviewSummary(session: InterviewSession, allQuestions: Question[]): Promise<string> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const scoredData = session.scores.map(s => {
-    const q = allQuestions.find(q => q.id === s.questionId);
+  const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+
+  const scoredData = session.scores.map((s) => {
+    const q = allQuestions.find((q) => q.id === s.questionId);
     return {
       category: q?.category || 'Inne',
       question: q?.question || 'Pytanie usunięte',
-      rating: s.rating
+      rating: s.rating,
     };
   });
 
-  const usedCategories = Array.from(new Set(scoredData.map(d => d.category)));
+  const usedCategories = Array.from(new Set(scoredData.map((d) => d.category)));
 
   const prompt = `
     Działaj jako senior tech lead. Przeprowadziłeś rozmowę techniczną z kandydatem o imieniu ${session.candidate.name}.
@@ -36,16 +35,20 @@ export async function generateInterviewSummary(session: InterviewSession, allQue
       model: 'gemini-3-flash-preview',
       contents: prompt,
     });
-    return response.text || "Nie udało się wygenerować podsumowania.";
+    return response.text || 'Nie udało się wygenerować podsumowania.';
   } catch (error) {
-    console.error("Gemini Error:", error);
-    return "Wystąpił błąd podczas generowania podsumowania przez AI.";
+    console.error('Gemini Error:', error);
+    return 'Wystąpił błąd podczas generowania podsumowania przez AI.';
   }
 }
 
-export async function generateNewQuestions(category: string, topic: string, count: number): Promise<Partial<Question>[]> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
+export async function generateNewQuestions(
+  category: string,
+  topic: string,
+  count: number,
+): Promise<Partial<Question>[]> {
+  const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+
   const prompt = `Wygeneruj ${count} pytań rekrutacyjnych wraz z prawidłowymi odpowiedziami dla kategorii "${category}". 
   Temat przewodni: ${topic || 'ogólna wiedza techniczna'}.
   Wszystkie pytania i odpowiedzi muszą być w języku POLSKIM.
@@ -56,24 +59,25 @@ export async function generateNewQuestions(category: string, topic: string, coun
       model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
-        responseMimeType: "application/json",
+        responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
           items: {
             type: Type.OBJECT,
             properties: {
-              question: { type: Type.STRING, description: "Treść pytania rekrutacyjnego" },
-              correctAnswer: { type: Type.STRING, description: "Modelowa prawidłowa odpowiedź" }
+              question: { type: Type.STRING, description: 'Treść pytania rekrutacyjnego' },
+              correctAnswer: { type: Type.STRING, description: 'Modelowa prawidłowa odpowiedź' },
             },
-            required: ["question", "correctAnswer"]
-          }
-        }
-      }
+            required: ['question', 'correctAnswer'],
+          },
+        },
+      },
     });
 
+    console.log(response.text);
     return JSON.parse(response.text);
   } catch (error) {
-    console.error("AI Question Generation Error:", error);
-    throw new Error("Nie udało się wygenerować pytań przez AI.");
+    console.error('AI Question Generation Error:', error);
+    throw new Error('Nie udało się wygenerować pytań przez AI.');
   }
 }

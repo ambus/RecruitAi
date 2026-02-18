@@ -5,10 +5,16 @@ import { QUESTIONS as INITIAL_QUESTIONS, DEFAULT_CATEGORIES } from './constants'
 import CandidateForm from './components/CandidateForm';
 import RatingScale from './components/RatingScale';
 import { generateInterviewSummary, generateNewQuestions } from './services/geminiService';
+import { 
+  auth, db, googleProvider, signInWithPopup, signOut, onAuthStateChanged, User,
+  collection, doc, setDoc, addDoc, deleteDoc, updateDoc, onSnapshot, query, orderBy 
+} from './services/firebase';
 
 type View = 'START' | 'FORM' | 'INTERVIEW' | 'HISTORY' | 'SUMMARY' | 'QUESTIONS_MGMT';
 
 const App: React.FC = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [view, setView] = useState<View>('START');
   const [session, setSession] = useState<InterviewSession | null>(null);
   const [history, setHistory] = useState<InterviewSession[]>([]);
@@ -31,54 +37,69 @@ const App: React.FC = () => {
   const historyFileInputRef = useRef<HTMLInputElement>(null);
   const questionsFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Initial Load
+  // Auth Listener
   useEffect(() => {
-    const savedHistory = localStorage.getItem('recruit_ai_history');
-    if (savedHistory) {
-      try { setHistory(JSON.parse(savedHistory)); } catch (e) { console.error(e); }
-    }
-
-    const savedQuestions = localStorage.getItem('recruit_ai_questions');
-    if (savedQuestions) {
-      try { setQuestions(JSON.parse(savedQuestions)); } catch (e) { setQuestions(INITIAL_QUESTIONS); }
-    } else {
-      setQuestions(INITIAL_QUESTIONS);
-    }
-
-    const savedCategories = localStorage.getItem('recruit_ai_categories');
-    if (savedCategories) {
-      try { setCategories(JSON.parse(savedCategories)); } catch (e) { setCategories(DEFAULT_CATEGORIES); }
-    } else {
-      setCategories(DEFAULT_CATEGORIES);
-    }
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
   }, []);
 
-  // Sync with Storage
+  // Real-time Firestore Sync
   useEffect(() => {
-    localStorage.setItem('recruit_ai_questions', JSON.stringify(questions));
-  }, [questions]);
+    if (!user) return;
 
-  useEffect(() => {
-    localStorage.setItem('recruit_ai_categories', JSON.stringify(categories));
-  }, [categories]);
+    // Sync Categories
+    const catRef = doc(db, 'settings', 'categories');
+    const unsubCats = onSnapshot(catRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setCategories(docSnap.data().list || DEFAULT_CATEGORIES);
+      } else {
+        // Initial set if not exists in DB
+        setDoc(catRef, { list: DEFAULT_CATEGORIES });
+      }
+    });
 
-  const saveToHistory = (completedSession: InterviewSession) => {
-    const newHistory = [completedSession, ...history];
-    setHistory(newHistory);
-    localStorage.setItem('recruit_ai_history', JSON.stringify(newHistory));
+    // Sync Questions
+    const qQuery = query(collection(db, 'questions'));
+    const unsubQs = onSnapshot(qQuery, (snap) => {
+      const qs: Question[] = [];
+      snap.forEach(d => qs.push({ id: d.id, ...d.data() } as Question));
+      setQuestions(qs.length > 0 ? qs : INITIAL_QUESTIONS);
+    });
+
+    // Sync History
+    const hQuery = query(collection(db, 'interviews'), orderBy('candidate.interviewDate', 'desc'));
+    const unsubHistory = onSnapshot(hQuery, (snap) => {
+      const hs: InterviewSession[] = [];
+      snap.forEach(d => hs.push(d.data() as InterviewSession));
+      setHistory(hs);
+    });
+
+    return () => {
+      unsubCats();
+      unsubQs();
+      unsubHistory();
+    };
+  }, [user]);
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login failed", error);
+    }
   };
 
-  const handleExportHistory = () => {
-    const dataStr = JSON.stringify(history, null, 2);
-    const dataBlob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `recruit_ai_history_${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  const handleLogout = () => signOut(auth);
+
+  const saveToHistory = async (completedSession: InterviewSession) => {
+    try {
+      await addDoc(collection(db, 'interviews'), completedSession);
+    } catch (error) {
+      console.error("Failed to save history to Firebase", error);
+    }
   };
 
   const handleExportQuestions = () => {
@@ -95,36 +116,15 @@ const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleImportHistoryFile = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const importedData = JSON.parse(e.target?.result as string);
-        if (Array.isArray(importedData)) {
-          setHistory(prev => {
-            const combined = [...importedData, ...prev];
-            const unique = Array.from(new Map(combined.map(item => [item.candidate.id + item.candidate.interviewDate, item])).values());
-            return unique;
-          });
-          alert('Historia zaimportowana.');
-        }
-      } catch (err) { alert('Błąd importu.'); }
-    };
-    reader.readAsText(file);
-    event.target.value = '';
-  };
-
   const handleImportQuestionsFile = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const imported = JSON.parse(e.target?.result as string);
-        let importedQuestions = [];
-        let importedCategories = [];
+        let importedQuestions: Question[] = [];
+        let importedCategories: string[] = [];
         
         if (Array.isArray(imported)) {
           importedQuestions = imported;
@@ -133,14 +133,17 @@ const App: React.FC = () => {
           importedCategories = imported.categories;
         }
 
-        if (confirm('Zastąpić aktualne dane?')) {
-          setQuestions(importedQuestions);
-          if (importedCategories.length > 0) setCategories(importedCategories);
-        } else {
-          setQuestions(prev => [...prev, ...importedQuestions]);
-          if (importedCategories.length > 0) setCategories(prev => Array.from(new Set([...prev, ...importedCategories])));
+        if (confirm('Import zsynchronizuje dane z Firebase. Kontynuować?')) {
+          // Bulk add questions to Firestore
+          for (const q of importedQuestions) {
+            const { id, ...data } = q;
+            await addDoc(collection(db, 'questions'), data);
+          }
+          if (importedCategories.length > 0) {
+            await setDoc(doc(db, 'settings', 'categories'), { list: Array.from(new Set([...categories, ...importedCategories])) });
+          }
+          alert('Dane zaimportowane do chmury.');
         }
-        alert('Dane zaktualizowane.');
       } catch (err) { alert('Błąd importu.'); }
     };
     reader.readAsText(file);
@@ -148,51 +151,55 @@ const App: React.FC = () => {
   };
 
   // Category Management Logic
-  const handleAddCategory = () => {
+  const handleAddCategory = async () => {
     if (!newCategoryName || categories.includes(newCategoryName)) return;
-    setCategories([...categories, newCategoryName]);
+    const newList = [...categories, newCategoryName];
+    await setDoc(doc(db, 'settings', 'categories'), { list: newList });
     setNewCategoryName('');
   };
 
-  const handleDeleteCategory = (cat: string) => {
+  const handleDeleteCategory = async (cat: string) => {
     const count = questions.filter(q => q.category === cat).length;
     if (count > 0) {
-      if (!confirm(`Kategoria "${cat}" zawiera ${count} pytań. Czy na pewno chcesz ją usunąć? Pytania pozostaną bez kategorii.`)) return;
+      if (!confirm(`Kategoria "${cat}" zawiera ${count} pytań. Czy na pewno chcesz ją usunąć?`)) return;
     }
-    setCategories(categories.filter(c => c !== cat));
+    const newList = categories.filter(c => c !== cat);
+    await setDoc(doc(db, 'settings', 'categories'), { list: newList });
   };
 
-  const handleUpdateCategory = () => {
+  const handleUpdateCategory = async () => {
     if (!editingCategory || !editingCategory.new || categories.includes(editingCategory.new)) return;
     
-    // Update category list
-    setCategories(categories.map(c => c === editingCategory.old ? editingCategory.new : c));
+    const newList = categories.map(c => c === editingCategory.old ? editingCategory.new : c);
+    await setDoc(doc(db, 'settings', 'categories'), { list: newList });
     
-    // Update all questions belonging to this category
-    setQuestions(questions.map(q => q.category === editingCategory.old ? { ...q, category: editingCategory.new } : q));
+    // Batch update questions in category
+    const toUpdate = questions.filter(q => q.category === editingCategory.old);
+    for (const q of toUpdate) {
+      await updateDoc(doc(db, 'questions', q.id), { category: editingCategory.new });
+    }
     
     setEditingCategory(null);
   };
 
   // Question Management Logic
-  const handleSaveQuestion = (e: React.FormEvent) => {
+  const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingQuestion?.question || !editingQuestion?.category || !editingQuestion?.correctAnswer) return;
 
-    if (editingQuestion.id) {
-      setQuestions(prev => prev.map(q => q.id === editingQuestion.id ? (editingQuestion as Question) : q));
+    const { id, ...data } = editingQuestion;
+    if (id) {
+      await updateDoc(doc(db, 'questions', id), data);
     } else {
-      const newQ: Question = {
-        ...editingQuestion as Question,
-        id: Math.random().toString(36).substr(2, 9)
-      };
-      setQuestions(prev => [...prev, newQ]);
+      await addDoc(collection(db, 'questions'), data);
     }
     setEditingQuestion(null);
   };
 
-  const handleDeleteQuestion = (id: string) => {
-    if (confirm('Usunąć pytanie?')) setQuestions(prev => prev.filter(q => q.id !== id));
+  const handleDeleteQuestion = async (id: string) => {
+    if (confirm('Usunąć pytanie z bazy Firebase?')) {
+      await deleteDoc(doc(db, 'questions', id));
+    }
   };
 
   const handleAiGenerate = async (e: React.FormEvent) => {
@@ -202,14 +209,14 @@ const App: React.FC = () => {
     setIsGeneratingAi(true);
     try {
       const newQuestions = await generateNewQuestions(aiGenParams.category, aiGenParams.topic, aiGenParams.count);
-      const questionsWithIds: Question[] = newQuestions.map(q => ({
-        ...q as Question,
-        id: Math.random().toString(36).substr(2, 9),
-        category: aiGenParams.category
-      }));
-      setQuestions(prev => [...prev, ...questionsWithIds]);
+      for (const q of newQuestions) {
+        await addDoc(collection(db, 'questions'), {
+          ...q,
+          category: aiGenParams.category
+        });
+      }
       setShowAiGen(false);
-      alert(`Wygenerowano pomyślnie ${newQuestions.length} pytań.`);
+      alert(`Wygenerowano i zapisano w Firebase ${newQuestions.length} pytań.`);
     } catch (err) {
       alert("Wystąpił błąd podczas generowania pytań.");
     } finally {
@@ -240,7 +247,7 @@ const App: React.FC = () => {
     const summary = await generateInterviewSummary(session, questions);
     const completedSession = { ...session, isCompleted: true, aiSummary: summary };
     setSession(completedSession);
-    saveToHistory(completedSession);
+    await saveToHistory(completedSession);
     setIsSummarizing(false);
     setView('SUMMARY');
   };
@@ -265,12 +272,46 @@ const App: React.FC = () => {
     }));
   }, [questions, categories]);
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-slate-50">
+        <div className="bg-white p-10 rounded-3xl shadow-2xl border border-slate-100 max-w-md w-full text-center">
+          <h1 className="text-4xl font-black text-slate-800 mb-2">Recruit<span className="text-blue-600">AI</span></h1>
+          <p className="text-slate-500 mb-8">Zaloguj się, aby uzyskać dostęp do panelu rekrutera.</p>
+          <button 
+            onClick={handleLogin}
+            className="w-full flex items-center justify-center gap-3 bg-white border border-slate-200 text-slate-700 font-bold py-3 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
+          >
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
+            Zaloguj przez Google
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // View: START
   if (view === 'START') {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-slate-50">
+        <div className="absolute top-6 right-6 flex items-center gap-4">
+          <div className="text-right">
+            <p className="text-sm font-bold text-slate-800">{user.displayName}</p>
+            <button onClick={handleLogout} className="text-xs text-red-500 hover:underline">Wyloguj</button>
+          </div>
+          <img src={user.photoURL || ''} className="w-10 h-10 rounded-full border border-slate-200" alt="Avatar" />
+        </div>
+        
         <h1 className="text-5xl font-black text-center mb-4 text-slate-800 tracking-tight">Recruit<span className="text-blue-600">AI</span></h1>
-        <p className="text-slate-500 mb-12 text-lg text-center">Profesjonalny asystent rekrutacji technicznej</p>
+        <p className="text-slate-500 mb-12 text-lg text-center">Chmurowy asystent rekrutacji technicznej</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl">
           <button onClick={() => setView('FORM')} className="group p-8 bg-white border-2 border-transparent hover:border-blue-500 rounded-3xl shadow-xl transition-all flex flex-col items-center gap-4 text-center">
             <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg></div>
@@ -296,7 +337,7 @@ const App: React.FC = () => {
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
           <div>
             <h1 className="text-3xl font-bold text-slate-800">Zarządzanie Bazą</h1>
-            <p className="text-slate-500">Konfiguruj pytania i kategorie</p>
+            <p className="text-slate-500">Dane synchronizowane z Firebase</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button onClick={() => setShowAiGen(true)} className="px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold rounded-lg hover:opacity-90 transition-all shadow-md flex items-center gap-2">
@@ -312,13 +353,13 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {/* AI Question Generator Modal */}
+        {/* AI Generator Modal, Category Modal, Question Modal - Zachowane z poprzedniej wersji ale z Firebase logic */}
         {showAiGen && (
           <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
               <h3 className="text-2xl font-bold mb-6 text-slate-800 flex items-center gap-2">
                 <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                Generuj pytania AI
+                AI w Chmurze
               </h3>
               <form onSubmit={handleAiGenerate} className="space-y-4">
                 <div>
@@ -338,27 +379,18 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     className="w-full px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900"
-                    placeholder="np. React Hooks, Flexbox, SQL Join"
+                    placeholder="np. React Hooks, Flexbox"
                     value={aiGenParams.topic}
                     onChange={(e) => setAiGenParams({...aiGenParams, topic: e.target.value})}
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-600 mb-1">Liczba pytań: {aiGenParams.count}</label>
-                  <input 
-                    type="range" min="1" max="10" 
-                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                    value={aiGenParams.count}
-                    onChange={(e) => setAiGenParams({...aiGenParams, count: parseInt(e.target.value)})}
-                  />
+                  <input type="range" min="1" max="10" value={aiGenParams.count} onChange={(e) => setAiGenParams({...aiGenParams, count: parseInt(e.target.value)})} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600" />
                 </div>
                 <div className="flex gap-4 pt-4">
-                  <button 
-                    type="submit" 
-                    disabled={isGeneratingAi}
-                    className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors disabled:bg-slate-300"
-                  >
-                    {isGeneratingAi ? 'Generowanie...' : 'Generuj'}
+                  <button type="submit" disabled={isGeneratingAi} className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors disabled:bg-slate-300">
+                    {isGeneratingAi ? 'Generowanie...' : 'Generuj i Zapisz'}
                   </button>
                   <button type="button" onClick={() => setShowAiGen(false)} className="flex-1 bg-slate-100 text-slate-600 font-bold py-3 rounded-lg hover:bg-slate-200 transition-colors">Anuluj</button>
                 </div>
@@ -367,40 +399,22 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* Category Mgmt Modal */}
         {showCategoryMgmt && (
           <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
               <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-bold text-slate-800">Zarządzaj Kategoriami</h3>
-                <button onClick={() => { setShowCategoryMgmt(false); setEditingCategory(null); }} className="text-slate-400 hover:text-red-500">
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                </button>
+                <h3 className="text-2xl font-bold text-slate-800">Kategorie w Chmurze</h3>
+                <button onClick={() => setShowCategoryMgmt(false)} className="text-slate-400 hover:text-red-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg></button>
               </div>
-              
               <div className="flex gap-2 mb-6">
-                <input 
-                  type="text" 
-                  className="flex-1 px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900"
-                  placeholder="Nowa kategoria..."
-                  value={newCategoryName}
-                  onChange={e => setNewCategoryName(e.target.value)}
-                />
-                <button onClick={handleAddCategory} className="px-4 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700">Dodaj</button>
+                <input type="text" className="flex-1 px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900" placeholder="Nowa..." value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} />
+                <button onClick={handleAddCategory} className="px-4 py-2 bg-blue-600 text-white font-bold rounded-lg">Dodaj</button>
               </div>
-
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
+              <div className="space-y-2 max-h-64 overflow-y-auto">
                 {categories.map(cat => (
                   <div key={cat} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                     {editingCategory?.old === cat ? (
-                      <input 
-                        className="flex-1 bg-white border border-blue-400 rounded px-2 py-1 text-slate-900 outline-none"
-                        value={editingCategory.new}
-                        autoFocus
-                        onChange={e => setEditingCategory({ ...editingCategory, new: e.target.value })}
-                        onBlur={handleUpdateCategory}
-                        onKeyDown={e => e.key === 'Enter' && handleUpdateCategory()}
-                      />
+                      <input className="flex-1 bg-white border border-blue-400 rounded px-2 py-1 text-slate-900 outline-none" value={editingCategory.new} autoFocus onChange={e => setEditingCategory({ ...editingCategory, new: e.target.value })} onBlur={handleUpdateCategory} onKeyDown={e => e.key === 'Enter' && handleUpdateCategory()} />
                     ) : (
                       <span className="font-medium text-slate-700">{cat}</span>
                     )}
@@ -418,20 +432,13 @@ const App: React.FC = () => {
         {editingQuestion && (
           <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
              <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-lg">
-                <h3 className="text-2xl font-bold mb-6 text-slate-800">{editingQuestion.id ? 'Edytuj Pytanie' : 'Nowe Pytanie'}</h3>
+                <h3 className="text-2xl font-bold mb-6 text-slate-800">{editingQuestion.id ? 'Edytuj (Firebase)' : 'Nowe (Firebase)'}</h3>
                 <form onSubmit={handleSaveQuestion} className="space-y-4">
                    <div>
                       <label className="block text-sm font-medium text-slate-600 mb-1">Kategoria</label>
-                      <select 
-                        className="w-full px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900"
-                        value={editingQuestion.category}
-                        required
-                        onChange={(e) => setEditingQuestion({...editingQuestion, category: e.target.value})}
-                      >
+                      <select className="w-full px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900" value={editingQuestion.category} required onChange={(e) => setEditingQuestion({...editingQuestion, category: e.target.value})}>
                          <option value="">Wybierz kategorię</option>
-                         {categories.map(cat => (
-                           <option key={cat} value={cat}>{cat}</option>
-                         ))}
+                         {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                       </select>
                    </div>
                    <div>
@@ -443,7 +450,7 @@ const App: React.FC = () => {
                       <textarea className="w-full px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 min-h-[100px] bg-white text-slate-900" value={editingQuestion.correctAnswer || ''} placeholder="Modelowa odpowiedź..." required onChange={(e) => setEditingQuestion({...editingQuestion, correctAnswer: e.target.value})} />
                    </div>
                    <div className="flex gap-4 pt-4">
-                      <button type="submit" className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors">Zapisz</button>
+                      <button type="submit" className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors">Zapisz w Chmurze</button>
                       <button type="button" onClick={() => setEditingQuestion(null)} className="flex-1 bg-slate-100 text-slate-600 font-bold py-3 rounded-lg hover:bg-slate-200 transition-colors">Anuluj</button>
                    </div>
                 </form>
@@ -489,11 +496,8 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen p-6 md:p-12 max-w-4xl mx-auto">
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-          <div><h1 className="text-3xl font-bold text-slate-800">Historia</h1></div>
+          <div><h1 className="text-3xl font-bold text-slate-800">Historia (Firebase)</h1></div>
           <div className="flex gap-2">
-            <button onClick={handleExportHistory} className="px-4 py-2 bg-white border border-slate-200 text-slate-600 font-bold rounded-lg hover:bg-slate-50 shadow-sm flex items-center gap-2">Eksport</button>
-            <button onClick={() => historyFileInputRef.current?.click()} className="px-4 py-2 bg-white border border-slate-200 text-slate-600 font-bold rounded-lg hover:bg-slate-50 shadow-sm flex items-center gap-2">Import</button>
-            <input type="file" ref={historyFileInputRef} onChange={handleImportHistoryFile} accept=".json" className="hidden" />
             <button onClick={() => setView('START')} className="px-4 py-2 bg-slate-200 text-slate-700 font-bold rounded-lg hover:bg-slate-300 transition-colors">Menu</button>
           </div>
         </header>
@@ -507,7 +511,7 @@ const App: React.FC = () => {
               <div className="text-xl font-black text-slate-700">{calculateTotalAverage(h).toFixed(1)}/5</div>
             </div>
           ))}
-          {history.length === 0 && <p className="text-center py-12 text-slate-400 italic">Brak zapisanych rozmów.</p>}
+          {history.length === 0 && <p className="text-center py-12 text-slate-400 italic">Brak zapisanych rozmów w Firebase.</p>}
         </div>
       </div>
     );

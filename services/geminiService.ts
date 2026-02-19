@@ -26,9 +26,11 @@ export async function generateInterviewSummary(
     Poniżej znajdują się wyniki z podziałem na pytania, ich poziom trudności i oceny (w skali 1-5):
     ${JSON.stringify(scoredData, null, 2)}
 
+    ${session.overallComment ? `Rekruter dodał następujące uwagi ogólne z rozmowy: "${session.overallComment}"` : ''}
+
     Przygotuj profesjonalne podsumowanie rozmowy w języku polskim.
     Podsumowanie musi zawierać:
-    1. Krótką ocenę ogólną (uwzględniając poziomy trudności pytań).
+    1. Krótką ocenę ogólną (uwzględniając poziomy trudności pytań oraz uwagi rekrutera).
     2. Szczegółową analizę dla każdej z ocenianych kategorii: ${usedCategories.join(', ')}.
     3. Rekomendację (Zatrudnić / Nie zatrudnić / Kolejny etap).
     4. Główne mocne strony i obszary do poprawy.

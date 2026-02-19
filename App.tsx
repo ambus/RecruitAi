@@ -245,7 +245,7 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!aiGenParams.category) return;
     if (!userAiKey) {
-      alert('Najpierw skonfiguruj klucz Gemini API w ustawieniach!');
+      alert('Najpierw skonfiguruj klucz API Gemini w ustawieniach!');
       setView('SETTINGS');
       return;
     }
@@ -300,7 +300,7 @@ const App: React.FC = () => {
   };
 
   const handleStartInterview = (candidate: Candidate) => {
-    setSession({ candidate, scores: [], isCompleted: false });
+    setSession({ candidate, scores: [], isCompleted: false, overallComment: '' });
     setView('INTERVIEW');
   };
 
@@ -314,6 +314,11 @@ const App: React.FC = () => {
       else newScores.push({ questionId, rating });
       return { ...prev, scores: newScores };
     });
+  };
+
+  const handleUpdateOverallComment = (comment: string) => {
+    if (!session) return;
+    setSession((prev) => (prev ? { ...prev, overallComment: comment } : null));
   };
 
   const handleFinish = async () => {
@@ -1135,6 +1140,21 @@ const App: React.FC = () => {
               </div>
             </section>
           ))}
+
+          {/* Overall Comment Section */}
+          <section className='pt-8 border-t border-slate-200'>
+            <h2 className='text-2xl font-black text-slate-800 border-l-4 border-slate-800 pl-4 py-1 mb-4'>
+              Ogólny komentarz / Notatki rekrutera
+            </h2>
+            <div className='bg-white border border-slate-200 rounded-xl p-4 shadow-sm'>
+              <textarea
+                className='w-full min-h-[150px] p-4 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 transition-all text-slate-800'
+                placeholder='Dodaj ogólne spostrzeżenia, które nie pasują do konkretnych pytań. Te uwagi zostaną uwzględnione przez AI przy generowaniu podsumowania...'
+                value={session.overallComment || ''}
+                onChange={(e) => handleUpdateOverallComment(e.target.value)}
+              />
+            </div>
+          </section>
         </main>
       </div>
     );
@@ -1162,6 +1182,17 @@ const App: React.FC = () => {
               <div className='text-4xl font-black text-blue-600'>{calculateTotalAverage(session).toFixed(1)}/5.0</div>
             </div>
           </header>
+
+          {/* Section for overall comment in summary */}
+          {session.overallComment && (
+            <div className='mb-6'>
+              <h3 className='text-xs font-black text-slate-400 uppercase mb-2'>Twoje notatki:</h3>
+              <p className='text-slate-600 italic bg-slate-50 p-4 rounded-lg border border-slate-100'>
+                {session.overallComment}
+              </p>
+            </div>
+          )}
+
           <div className='prose max-w-none text-slate-700 bg-blue-50/50 p-6 rounded-xl border border-blue-100 whitespace-pre-wrap leading-relaxed shadow-inner mb-10'>
             {session.aiSummary}
           </div>

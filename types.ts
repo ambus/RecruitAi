@@ -27,4 +27,5 @@ export interface InterviewSession {
   scores: Score[];
   isCompleted: boolean;
   aiSummary?: string;
+  overallComment?: string;
 }

@@ -69,16 +69,22 @@ const App: React.FC = () => {
       if (docSnap.exists()) {
         setCategories(docSnap.data().list || DEFAULT_CATEGORIES);
       } else {
-        // Initial set if not exists in DB
         setDoc(catRef, { list: DEFAULT_CATEGORIES });
       }
     });
 
-    // Sync Questions
+    // Sync Questions with Privacy Filter
     const qQuery = query(collection(db, 'questions'));
     const unsubQs = onSnapshot(qQuery, (snap) => {
       const qs: Question[] = [];
-      snap.forEach((d) => qs.push({ id: d.id, ...d.data() } as Question));
+      snap.forEach((d) => {
+        const data = d.data() as Question;
+        // Visible if: Public OR created by current user OR it is one of the initial questions (no createdBy)
+        const isVisible = !data.isPrivate || data.createdBy === user.uid || !data.createdBy;
+        if (isVisible) {
+          qs.push({ id: d.id, ...data });
+        }
+      });
       setQuestions(qs.length > 0 ? qs : INITIAL_QUESTIONS);
     });
 
@@ -147,10 +153,14 @@ const App: React.FC = () => {
         }
 
         if (confirm('Import zsynchronizuje dane z Firebase. Kontynuować?')) {
-          // Bulk add questions to Firestore
           for (const q of importedQuestions) {
             const { id, ...data } = q;
-            await addDoc(collection(db, 'questions'), data);
+            // When importing, mark as owned by user if not specified
+            await addDoc(collection(db, 'questions'), {
+              ...data,
+              createdBy: data.createdBy || user?.uid,
+              isPrivate: data.isPrivate || false,
+            });
           }
           if (importedCategories.length > 0) {
             await setDoc(doc(db, 'settings', 'categories'), {
@@ -167,7 +177,6 @@ const App: React.FC = () => {
     event.target.value = '';
   };
 
-  // Category Management Logic
   const handleAddCategory = async () => {
     if (!newCategoryName || categories.includes(newCategoryName)) return;
     const newList = [...categories, newCategoryName];
@@ -190,7 +199,6 @@ const App: React.FC = () => {
     const newList = categories.map((c) => (c === editingCategory.old ? editingCategory.new : c));
     await setDoc(doc(db, 'settings', 'categories'), { list: newList });
 
-    // Batch update questions in category
     const toUpdate = questions.filter((q) => q.category === editingCategory.old);
     for (const q of toUpdate) {
       await updateDoc(doc(db, 'questions', q.id), { category: editingCategory.new });
@@ -199,16 +207,23 @@ const App: React.FC = () => {
     setEditingCategory(null);
   };
 
-  // Question Management Logic
   const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingQuestion?.question || !editingQuestion?.category || !editingQuestion?.correctAnswer) return;
 
     const { id, ...data } = editingQuestion;
     if (id) {
-      await updateDoc(doc(db, 'questions', id), data);
+      await updateDoc(doc(db, 'questions', id), {
+        ...data,
+        // Optional: you might want to prevent others from editing your questions via Firestore rules,
+        // but here we ensure the UI matches the owner.
+      });
     } else {
-      await addDoc(collection(db, 'questions'), data);
+      await addDoc(collection(db, 'questions'), {
+        ...data,
+        createdBy: user?.uid,
+        isPrivate: !!editingQuestion.isPrivate,
+      });
     }
     setEditingQuestion(null);
   };
@@ -226,15 +241,14 @@ const App: React.FC = () => {
     setIsGeneratingAi(true);
     try {
       const newQuestions = await generateNewQuestions(aiGenParams.category, aiGenParams.topic, aiGenParams.count);
-      console.warn('1', newQuestions);
-
       for (const q of newQuestions) {
         await addDoc(collection(db, 'questions'), {
           ...q,
           category: aiGenParams.category,
+          createdBy: user?.uid,
+          isPrivate: false, // Default to public for AI generated if wanted, or could be private
         });
       }
-      console.warn(newQuestions);
       setShowAiGen(false);
       alert(`Wygenerowano i zapisano w Firebase ${newQuestions.length} pytań.`);
     } catch (err) {
@@ -452,7 +466,7 @@ const App: React.FC = () => {
               className='hidden'
             />
             <button
-              onClick={() => setEditingQuestion({ category: categories[0] || '' })}
+              onClick={() => setEditingQuestion({ category: categories[0] || '', isPrivate: false })}
               className='px-6 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors shadow-md'
             >
               + Pytanie
@@ -466,7 +480,6 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {/* AI Generator Modal, Category Modal, Question Modal - Zachowane z poprzedniej wersji ale z Firebase logic */}
         {showAiGen && (
           <div className='fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4'>
             <div className='bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md'>
@@ -656,6 +669,18 @@ const App: React.FC = () => {
                     onChange={(e) => setEditingQuestion({ ...editingQuestion, correctAnswer: e.target.value })}
                   />
                 </div>
+                <div className='flex items-center gap-2'>
+                  <input
+                    type='checkbox'
+                    id='isPrivate'
+                    checked={editingQuestion.isPrivate || false}
+                    onChange={(e) => setEditingQuestion({ ...editingQuestion, isPrivate: e.target.checked })}
+                    className='w-5 h-5 accent-blue-600'
+                  />
+                  <label htmlFor='isPrivate' className='text-slate-700 font-medium select-none cursor-pointer'>
+                    Oznacz jako prywatne (widoczne tylko dla Ciebie)
+                  </label>
+                </div>
                 <div className='flex gap-4 pt-4'>
                   <button
                     type='submit'
@@ -688,7 +713,19 @@ const App: React.FC = () => {
                     key={q.id}
                     className='bg-white p-5 rounded-xl border border-slate-200 flex justify-between items-center group'
                   >
-                    <div className='flex-1 pr-8'>
+                    <div className='flex-1 pr-8 flex items-center gap-3'>
+                      {q.isPrivate && (
+                        <span className='bg-amber-100 text-amber-700 px-2 py-1 rounded text-[10px] font-black uppercase flex items-center gap-1 shadow-sm shrink-0'>
+                          <svg className='w-3 h-3' fill='currentColor' viewBox='0 0 20 20'>
+                            <path
+                              fillRule='evenodd'
+                              d='M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z'
+                              clipRule='evenodd'
+                            />
+                          </svg>
+                          Prywatne
+                        </span>
+                      )}
                       <p className='font-semibold text-slate-700'>{q.question}</p>
                     </div>
                     <div className='flex gap-2'>
@@ -835,7 +872,16 @@ const App: React.FC = () => {
                       className='bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow'
                     >
                       <div className='p-5 flex flex-col md:flex-row md:items-center justify-between gap-4'>
-                        <div className='flex-1 pr-4'>
+                        <div className='flex-1 pr-4 flex items-center gap-3'>
+                          {q.isPrivate && (
+                            <svg className='w-4 h-4 text-amber-500 shrink-0' fill='currentColor' viewBox='0 0 20 20'>
+                              <path
+                                fillRule='evenodd'
+                                d='M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z'
+                                clipRule='evenodd'
+                              />
+                            </svg>
+                          )}
                           <h3 className='text-lg font-semibold text-slate-700'>{q.question}</h3>
                         </div>
                         <div className='flex items-center gap-4 shrink-0'>

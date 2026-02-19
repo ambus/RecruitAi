@@ -1,9 +1,10 @@
-
 export interface Question {
   id: string;
   category: string;
   question: string;
   correctAnswer: string;
+  isPrivate?: boolean;
+  createdBy?: string;
 }
 
 export interface Score {

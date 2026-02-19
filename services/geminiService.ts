@@ -74,7 +74,6 @@ export async function generateNewQuestions(
       },
     });
 
-    console.log(response.text);
     return JSON.parse(response.text);
   } catch (error) {
     console.error('AI Question Generation Error:', error);

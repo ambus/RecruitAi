@@ -5,6 +5,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   initializeFirestore,
   onSnapshot,
@@ -17,7 +18,6 @@ import {
 /**
  * Konfiguracja Firebase.
  * Wartości są pobierane ze zmiennych środowiskowych.
- * Upewnij się, że zdefiniowałeś VITE_FIREBASE_API_KEY oraz inne wymagane klucze w swoim środowisku.
  */
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -28,7 +28,6 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-// Sprawdzenie krytycznych zmiennych w celu ułatwienia debugowania
 if (!firebaseConfig.apiKey) {
   console.error('BŁĄD: Brak VITE_FIREBASE_API_KEY. Skonfiguruj zmienne środowiskowe, aby logowanie działało.');
 }
@@ -48,6 +47,7 @@ export {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   onAuthStateChanged,
   onSnapshot,

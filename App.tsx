@@ -9,6 +9,7 @@ import {
   db,
   deleteDoc,
   doc,
+  getDoc,
   googleProvider,
   onAuthStateChanged,
   onSnapshot,
@@ -20,13 +21,14 @@ import {
   updateDoc,
   User,
 } from './services/firebase';
-import { generateInterviewSummary, generateNewQuestions } from './services/geminiService';
-import { Candidate, InterviewSession, Question } from './types';
+import { generateCategorySuggestions, generateInterviewSummary, generateNewQuestions } from './services/geminiService';
+import { Candidate, Difficulty, InterviewSession, Question } from './types';
 
 type View = 'START' | 'FORM' | 'INTERVIEW' | 'HISTORY' | 'SUMMARY' | 'QUESTIONS_MGMT' | 'SETTINGS';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [view, setView] = useState<View>('START');
   const [session, setSession] = useState<InterviewSession | null>(null);
@@ -47,15 +49,50 @@ const App: React.FC = () => {
 
   // AI Generation state
   const [showAiGen, setShowAiGen] = useState(false);
-  const [aiGenParams, setAiGenParams] = useState({ category: '', topic: '', count: 3 });
+  const [aiGenParams, setAiGenParams] = useState<{
+    category: string;
+    topic: string;
+    count: number;
+    difficulty: Difficulty;
+  }>({
+    category: '',
+    topic: '',
+    count: 3,
+    difficulty: 'Mid',
+  });
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [generatedPreview, setGeneratedPreview] = useState<Partial<Question>[] | null>(null);
+  const [selectedPreviewIndices, setSelectedPreviewIndices] = useState<Set<number>>(new Set());
+
+  // AI Category Suggestion state
+  const [isSuggestingCategories, setIsSuggestingCategories] = useState(false);
+  const [categoryAiPrompt, setCategoryAiPrompt] = useState('');
 
   const questionsFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Auth Listener
+  // Auth Listener + Authorization Check
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
+        try {
+          const userDocRef = doc(db, 'users', currentUser.uid);
+          const userDocSnap = await getDoc(userDocRef);
+
+          if (userDocSnap.exists()) {
+            setIsAuthorized(true);
+          } else {
+            console.warn(`User ${currentUser.uid} not found in 'users' collection.`);
+            setIsAuthorized(false);
+          }
+        } catch (error) {
+          console.error('Błąd autoryzacji Firestore:', error);
+          setIsAuthorized(false);
+        }
+      } else {
+        setUser(null);
+        setIsAuthorized(null);
+      }
       setAuthLoading(false);
     });
     return () => unsubscribe();
@@ -63,9 +100,8 @@ const App: React.FC = () => {
 
   // Real-time Firestore Sync
   useEffect(() => {
-    if (!user) return;
+    if (!user || !isAuthorized) return;
 
-    // Sync Categories
     const catRef = doc(db, 'settings', 'categories');
     const unsubCats = onSnapshot(catRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -75,7 +111,6 @@ const App: React.FC = () => {
       }
     });
 
-    // Sync Questions with Privacy Filter
     const qQuery = query(collection(db, 'questions'));
     const unsubQs = onSnapshot(qQuery, (snap) => {
       const qs: Question[] = [];
@@ -89,7 +124,6 @@ const App: React.FC = () => {
       setQuestions(qs.length > 0 ? qs : INITIAL_QUESTIONS);
     });
 
-    // Sync History
     const hQuery = query(collection(db, 'interviews'), orderBy('candidate.interviewDate', 'desc'));
     const unsubHistory = onSnapshot(hQuery, (snap) => {
       const hs: InterviewSession[] = [];
@@ -102,13 +136,15 @@ const App: React.FC = () => {
       unsubQs();
       unsubHistory();
     };
-  }, [user]);
+  }, [user, isAuthorized]);
 
   const handleLogin = async () => {
     try {
+      setAuthLoading(true);
       await signInWithPopup(auth, googleProvider);
     } catch (error) {
       console.error('Login failed', error);
+      setAuthLoading(false);
     }
   };
 
@@ -122,66 +158,32 @@ const App: React.FC = () => {
     }
   };
 
-  const handleExportQuestions = () => {
-    const exportData = { questions, categories };
-    const dataStr = JSON.stringify(exportData, null, 2);
-    const dataBlob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `recruit_ai_data_${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleImportQuestionsFile = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const imported = JSON.parse(e.target?.result as string);
-        let importedQuestions: Question[] = [];
-        let importedCategories: string[] = [];
-
-        if (Array.isArray(imported)) {
-          importedQuestions = imported;
-        } else if (imported.questions && imported.categories) {
-          importedQuestions = imported.questions;
-          importedCategories = imported.categories;
-        }
-
-        if (confirm('Import zsynchronizuje dane z Firebase. Kontynuować?')) {
-          for (const q of importedQuestions) {
-            const { id, ...data } = q;
-            await addDoc(collection(db, 'questions'), {
-              ...data,
-              createdBy: data.createdBy || user?.uid,
-              isPrivate: data.isPrivate || false,
-            });
-          }
-          if (importedCategories.length > 0) {
-            await setDoc(doc(db, 'settings', 'categories'), {
-              list: Array.from(new Set([...categories, ...importedCategories])),
-            });
-          }
-          alert('Dane zaimportowane do chmury.');
-        }
-      } catch (err) {
-        alert('Błąd importu.');
-      }
-    };
-    reader.readAsText(file);
-    event.target.value = '';
-  };
-
   const handleAddCategory = async () => {
     if (!newCategoryName || categories.includes(newCategoryName)) return;
     const newList = [...categories, newCategoryName];
     await setDoc(doc(db, 'settings', 'categories'), { list: newList });
     setNewCategoryName('');
+  };
+
+  const handleAiSuggestCategories = async () => {
+    if (!categoryAiPrompt) return;
+    if (!userAiKey) {
+      alert('Skonfiguruj klucz API Gemini w ustawieniach.');
+      return;
+    }
+
+    setIsSuggestingCategories(true);
+    try {
+      const suggested = await generateCategorySuggestions(userAiKey, categoryAiPrompt);
+      const newList = Array.from(new Set([...categories, ...suggested]));
+      await setDoc(doc(db, 'settings', 'categories'), { list: newList });
+      setCategoryAiPrompt('');
+      alert(`Dodano ${suggested.length} nowych kategorii sugerowanych przez AI.`);
+    } catch (error: any) {
+      alert(error.message);
+    } finally {
+      setIsSuggestingCategories(false);
+    }
   };
 
   const handleDeleteCategory = async (cat: string) => {
@@ -194,7 +196,10 @@ const App: React.FC = () => {
   };
 
   const handleUpdateCategory = async () => {
-    if (!editingCategory || !editingCategory.new || categories.includes(editingCategory.new)) return;
+    if (!editingCategory || !editingCategory.new || categories.includes(editingCategory.new)) {
+      setEditingCategory(null);
+      return;
+    }
 
     const newList = categories.map((c) => (c === editingCategory.old ? editingCategory.new : c));
     await setDoc(doc(db, 'settings', 'categories'), { list: newList });
@@ -212,15 +217,19 @@ const App: React.FC = () => {
     if (!editingQuestion?.question || !editingQuestion?.category || !editingQuestion?.correctAnswer) return;
 
     const { id, ...data } = editingQuestion;
+    const difficulty = editingQuestion.difficulty || 'Mid';
+
     if (id) {
       await updateDoc(doc(db, 'questions', id), {
         ...data,
+        difficulty,
       });
     } else {
       await addDoc(collection(db, 'questions'), {
         ...data,
         createdBy: user?.uid,
         isPrivate: !!editingQuestion.isPrivate,
+        difficulty,
       });
     }
     setEditingQuestion(null);
@@ -248,22 +257,46 @@ const App: React.FC = () => {
         aiGenParams.category,
         aiGenParams.topic,
         aiGenParams.count,
+        aiGenParams.difficulty,
       );
-      for (const q of newQuestions) {
+      setGeneratedPreview(newQuestions);
+      // Domyślnie zaznacz wszystkie
+      setSelectedPreviewIndices(new Set(newQuestions.map((_, i) => i)));
+    } catch (err: any) {
+      alert(err.message || 'Wystąpił błąd podczas generowania pytań.');
+    } finally {
+      setIsGeneratingAi(false);
+    }
+  };
+
+  const handleSaveSelectedQuestions = async () => {
+    if (!generatedPreview) return;
+    const toSave = Array.from(selectedPreviewIndices).map((idx) => generatedPreview[idx]);
+
+    try {
+      for (const q of toSave) {
         await addDoc(collection(db, 'questions'), {
           ...q,
           category: aiGenParams.category,
           createdBy: user?.uid,
           isPrivate: false,
+          difficulty: aiGenParams.difficulty,
         });
       }
+      alert(`Zapisano ${toSave.length} pytań w Firebase.`);
+      setGeneratedPreview(null);
+      setSelectedPreviewIndices(new Set());
       setShowAiGen(false);
-      alert(`Wygenerowano i zapisano w Firebase ${newQuestions.length} pytań.`);
-    } catch (err: unknown) {
-      alert((err as Error).message || 'Wystąpił błąd podczas generowania pytań.');
-    } finally {
-      setIsGeneratingAi(false);
+    } catch (err) {
+      alert('Błąd podczas zapisywania pytań.');
     }
+  };
+
+  const togglePreviewSelection = (index: number) => {
+    const next = new Set(selectedPreviewIndices);
+    if (next.has(index)) next.delete(index);
+    else next.add(index);
+    setSelectedPreviewIndices(next);
   };
 
   const handleStartInterview = (candidate: Candidate) => {
@@ -319,6 +352,19 @@ const App: React.FC = () => {
     return targetSession.scores.reduce((acc, curr) => acc + curr.rating, 0) / targetSession.scores.length;
   };
 
+  const difficultyColor = (difficulty?: Difficulty) => {
+    switch (difficulty) {
+      case 'Junior':
+        return 'bg-green-100 text-green-700 border-green-200';
+      case 'Mid':
+        return 'bg-blue-100 text-blue-700 border-blue-200';
+      case 'Senior':
+        return 'bg-purple-100 text-purple-700 border-purple-200';
+      default:
+        return 'bg-slate-100 text-slate-700 border-slate-200';
+    }
+  };
+
   const questionsByCategory = useMemo(() => {
     return categories.map((cat) => ({
       name: cat,
@@ -358,7 +404,38 @@ const App: React.FC = () => {
     );
   }
 
-  // View: START
+  if (isAuthorized === false) {
+    return (
+      <div className='min-h-screen flex flex-col items-center justify-center p-4 bg-slate-50'>
+        <div className='bg-white p-10 rounded-3xl shadow-2xl border border-red-100 max-w-md w-full text-center'>
+          <div className='w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6'>
+            <svg className='w-10 h-10' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+              <path
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                strokeWidth='2'
+                d='M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'
+              />
+            </svg>
+          </div>
+          <h2 className='text-2xl font-black text-slate-800 mb-2'>Brak Uprawnień</h2>
+          <p className='text-slate-500 mb-8 leading-relaxed'>
+            Twój adres e-mail (<span className='font-bold'>{user.email}</span>) nie posiada dostępu do tej platformy.
+          </p>
+          <div className='bg-slate-50 p-3 rounded-lg mb-8 text-xs font-mono text-slate-400 break-all select-all'>
+            Twoje UID: {user.uid}
+          </div>
+          <button
+            onClick={handleLogout}
+            className='w-full bg-slate-800 text-white font-bold py-3 rounded-xl hover:bg-slate-900 transition-all shadow-md'
+          >
+            Wyloguj i spróbuj ponownie
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (view === 'START') {
     return (
       <div className='min-h-screen flex flex-col items-center justify-center p-4 bg-slate-50 relative'>
@@ -403,7 +480,7 @@ const App: React.FC = () => {
               />
             </svg>
             <p className='text-sm'>
-              Brak klucza API Gemini. Funkcje generowania pytań i podsumowań AI będą niedostępne.
+              Brak klucza API Gemini.
               <button onClick={() => setView('SETTINGS')} className='ml-2 font-bold underline'>
                 Skonfiguruj teraz
               </button>
@@ -460,7 +537,6 @@ const App: React.FC = () => {
     );
   }
 
-  // View: SETTINGS
   if (view === 'SETTINGS') {
     return (
       <div className='min-h-screen flex flex-col items-center justify-center p-4 bg-slate-50'>
@@ -474,10 +550,7 @@ const App: React.FC = () => {
             </svg>
             Powrót
           </button>
-
-          <h2 className='text-3xl font-black text-slate-800 mb-2'>Ustawienia Usera</h2>
-          <p className='text-slate-500 mb-8'>Skonfiguruj swój klucz do Gemini AI</p>
-
+          <h2 className='text-3xl font-black text-slate-800 mb-2'>Ustawienia</h2>
           <form onSubmit={handleSaveAiKey} className='space-y-6'>
             <div>
               <label className='block text-sm font-black text-slate-600 mb-2 uppercase tracking-wide'>
@@ -487,39 +560,23 @@ const App: React.FC = () => {
                 type='password'
                 value={userAiKey}
                 onChange={(e) => setUserAiKey(e.target.value)}
-                placeholder='Wklej swój klucz tutaj...'
+                placeholder='Wklej swój klucz...'
                 className='w-full px-5 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 text-slate-900 transition-all font-mono'
                 required
               />
-              <p className='mt-3 text-sm text-slate-500 leading-relaxed'>
-                Klucz zostanie zapisany wyłącznie w Twojej przeglądarce (localStorage). Możesz go wygenerować za darmo w
-                <a
-                  href='https://aistudio.google.com/'
-                  target='_blank'
-                  rel='noopener noreferrer'
-                  className='text-blue-600 font-bold hover:underline ml-1'
-                >
-                  Google AI Studio
-                </a>
-                .
-              </p>
             </div>
-
-            <div className='pt-4'>
-              <button
-                type='submit'
-                className='w-full py-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg transition-all'
-              >
-                Zapisz Ustawienia
-              </button>
-            </div>
+            <button
+              type='submit'
+              className='w-full py-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg transition-all'
+            >
+              Zapisz Ustawienia
+            </button>
           </form>
         </div>
       </div>
     );
   }
 
-  // View: QUESTIONS_MGMT
   if (view === 'QUESTIONS_MGMT') {
     return (
       <div className='min-h-screen p-6 md:p-12 max-w-5xl mx-auto'>
@@ -530,10 +587,12 @@ const App: React.FC = () => {
           </div>
           <div className='flex flex-wrap gap-2'>
             <button
-              onClick={() => setShowAiGen(true)}
+              onClick={() => {
+                setShowAiGen(true);
+                setGeneratedPreview(null);
+              }}
               disabled={!userAiKey}
               className={`px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold rounded-lg hover:opacity-90 transition-all shadow-md flex items-center gap-2 ${!userAiKey ? 'opacity-50 cursor-not-allowed' : ''}`}
-              title={!userAiKey ? 'Skonfiguruj klucz API w ustawieniach' : ''}
             >
               <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
                 <path strokeLinecap='round' strokeLinejoin='round' strokeWidth='2' d='M13 10V3L4 14h7v7l9-11h-7z' />
@@ -547,42 +606,7 @@ const App: React.FC = () => {
               Kategorie
             </button>
             <button
-              onClick={handleExportQuestions}
-              className='px-4 py-2 bg-white border border-slate-200 text-slate-600 font-bold rounded-lg hover:bg-slate-50 transition-colors flex items-center gap-2 shadow-sm'
-            >
-              <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                <path
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  strokeWidth='2'
-                  d='M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4'
-                />
-              </svg>
-              Eksport
-            </button>
-            <button
-              onClick={() => questionsFileInputRef.current?.click()}
-              className='px-4 py-2 bg-white border border-slate-200 text-slate-600 font-bold rounded-lg hover:bg-slate-50 transition-colors flex items-center gap-2 shadow-sm'
-            >
-              <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                <path
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  strokeWidth='2'
-                  d='M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12'
-                />
-              </svg>
-              Import
-            </button>
-            <input
-              type='file'
-              ref={questionsFileInputRef}
-              onChange={handleImportQuestionsFile}
-              accept='.json'
-              className='hidden'
-            />
-            <button
-              onClick={() => setEditingQuestion({ category: categories[0] || '', isPrivate: false })}
+              onClick={() => setEditingQuestion({ category: categories[0] || '', isPrivate: false, difficulty: 'Mid' })}
               className='px-6 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors shadow-md'
             >
               + Pytanie
@@ -597,99 +621,182 @@ const App: React.FC = () => {
         </header>
 
         {showAiGen && (
-          <div className='fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4'>
-            <div className='bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md'>
-              <h3 className='text-2xl font-bold mb-6 text-slate-800 flex items-center gap-2'>
-                <svg className='w-6 h-6 text-blue-600' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                  <path strokeLinecap='round' strokeLinejoin='round' strokeWidth='2' d='M13 10V3L4 14h7v7l9-11h-7z' />
-                </svg>
-                AI w Chmurze
-              </h3>
-              <form onSubmit={handleAiGenerate} className='space-y-4'>
-                <div>
-                  <label className='block text-sm font-medium text-slate-600 mb-1'>Docelowa Kategoria</label>
-                  <select
-                    className='w-full px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900'
-                    value={aiGenParams.category}
-                    required
-                    onChange={(e) => setAiGenParams({ ...aiGenParams, category: e.target.value })}
-                  >
-                    <option value=''>Wybierz...</option>
-                    {categories.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
+          <div className='fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto'>
+            <div className='bg-white rounded-2xl shadow-2xl p-8 w-full max-w-2xl my-auto'>
+              {!generatedPreview ? (
+                <>
+                  <h3 className='text-2xl font-bold mb-6 text-slate-800'>AI Generuj Pytania</h3>
+                  <form onSubmit={handleAiGenerate} className='space-y-4'>
+                    <div>
+                      <label className='block text-sm font-medium text-slate-600 mb-1'>Kategoria</label>
+                      <select
+                        className='w-full px-4 py-2 border border-slate-200 rounded-lg bg-white text-slate-900'
+                        value={aiGenParams.category}
+                        required
+                        onChange={(e) => setAiGenParams({ ...aiGenParams, category: e.target.value })}
+                      >
+                        <option value=''>Wybierz...</option>
+                        {categories.map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className='block text-sm font-medium text-slate-600 mb-1'>Trudność</label>
+                      <select
+                        className='w-full px-4 py-2 border border-slate-200 rounded-lg bg-white text-slate-900'
+                        value={aiGenParams.difficulty}
+                        required
+                        onChange={(e) => setAiGenParams({ ...aiGenParams, difficulty: e.target.value as Difficulty })}
+                      >
+                        <option value='Junior'>Junior</option>
+                        <option value='Mid'>Mid</option>
+                        <option value='Senior'>Senior</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className='block text-sm font-medium text-slate-600 mb-1'>
+                        Liczba pytań: {aiGenParams.count}
+                      </label>
+                      <input
+                        type='range'
+                        min='1'
+                        max='10'
+                        value={aiGenParams.count}
+                        onChange={(e) => setAiGenParams({ ...aiGenParams, count: parseInt(e.target.value) })}
+                        className='w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600'
+                      />
+                    </div>
+                    <div>
+                      <label className='block text-sm font-medium text-slate-600 mb-1'>Temat / Słowa kluczowe</label>
+                      <input
+                        type='text'
+                        className='w-full px-4 py-2 border border-slate-200 rounded-lg bg-white text-slate-900'
+                        placeholder='np. React Hooks'
+                        value={aiGenParams.topic}
+                        onChange={(e) => setAiGenParams({ ...aiGenParams, topic: e.target.value })}
+                      />
+                    </div>
+                    <button
+                      type='submit'
+                      disabled={isGeneratingAi}
+                      className='w-full bg-blue-600 text-white font-bold py-3 rounded-lg disabled:bg-slate-300'
+                    >
+                      {isGeneratingAi ? 'Generowanie...' : 'Pobierz propozycje'}
+                    </button>
+                    <button
+                      type='button'
+                      onClick={() => setShowAiGen(false)}
+                      className='w-full bg-slate-100 text-slate-600 font-bold py-3 rounded-lg'
+                    >
+                      Anuluj
+                    </button>
+                  </form>
+                </>
+              ) : (
+                <>
+                  <h3 className='text-2xl font-bold mb-6 text-slate-800'>Wybierz pytania do zapisu</h3>
+                  <p className='text-slate-500 mb-4 text-sm'>
+                    Wybierz propozycje wygenerowane przez AI, które chcesz dodać do swojej bazy.
+                  </p>
+                  <div className='space-y-3 max-h-96 overflow-y-auto pr-2 mb-6'>
+                    {generatedPreview.map((q, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => togglePreviewSelection(idx)}
+                        className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${selectedPreviewIndices.has(idx) ? 'border-blue-500 bg-blue-50' : 'border-slate-100 bg-slate-50 opacity-60'}`}
+                      >
+                        <div className='flex items-start gap-3'>
+                          <div
+                            className={`mt-1 w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 ${selectedPreviewIndices.has(idx) ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 bg-white'}`}
+                          >
+                            {selectedPreviewIndices.has(idx) && (
+                              <svg className='w-3 h-3' fill='currentColor' viewBox='0 0 20 20'>
+                                <path d='M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z' />
+                              </svg>
+                            )}
+                          </div>
+                          <div>
+                            <p className='font-bold text-slate-800 text-sm mb-1'>{q.question}</p>
+                            <p className='text-xs text-slate-500 italic'>{q.correctAnswer}</p>
+                          </div>
+                        </div>
+                      </div>
                     ))}
-                  </select>
-                </div>
-                <div>
-                  <label className='block text-sm font-medium text-slate-600 mb-1'>Temat / Słowa kluczowe</label>
-                  <input
-                    type='text'
-                    className='w-full px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900'
-                    placeholder='np. React Hooks, Flexbox'
-                    value={aiGenParams.topic}
-                    onChange={(e) => setAiGenParams({ ...aiGenParams, topic: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className='block text-sm font-medium text-slate-600 mb-1'>
-                    Liczba pytań: {aiGenParams.count}
-                  </label>
-                  <input
-                    type='range'
-                    min='1'
-                    max='10'
-                    value={aiGenParams.count}
-                    onChange={(e) => setAiGenParams({ ...aiGenParams, count: parseInt(e.target.value) })}
-                    className='w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600'
-                  />
-                </div>
-                <div className='flex gap-4 pt-4'>
-                  <button
-                    type='submit'
-                    disabled={isGeneratingAi}
-                    className='flex-1 bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors disabled:bg-slate-300'
-                  >
-                    {isGeneratingAi ? 'Generowanie...' : 'Generuj i Zapisz'}
-                  </button>
-                  <button
-                    type='button'
-                    onClick={() => setShowAiGen(false)}
-                    className='flex-1 bg-slate-100 text-slate-600 font-bold py-3 rounded-lg hover:bg-slate-200 transition-colors'
-                  >
-                    Anuluj
-                  </button>
-                </div>
-              </form>
+                  </div>
+                  <div className='flex gap-4'>
+                    <button
+                      onClick={handleSaveSelectedQuestions}
+                      disabled={selectedPreviewIndices.size === 0}
+                      className='flex-1 bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 disabled:bg-slate-300'
+                    >
+                      Zapisz wybrane ({selectedPreviewIndices.size})
+                    </button>
+                    <button
+                      onClick={() => setGeneratedPreview(null)}
+                      className='flex-1 bg-slate-100 text-slate-600 font-bold py-3 rounded-lg'
+                    >
+                      Wróć do ustawień
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
 
         {showCategoryMgmt && (
           <div className='fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4'>
-            <div className='bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md'>
+            <div className='bg-white rounded-2xl shadow-2xl p-8 w-full max-w-lg'>
               <div className='flex justify-between items-center mb-6'>
-                <h3 className='text-2xl font-bold text-slate-800'>Kategorie w Chmurze</h3>
+                <h3 className='text-2xl font-bold text-slate-800'>Zarządzanie Kategoriami</h3>
                 <button onClick={() => setShowCategoryMgmt(false)} className='text-slate-400 hover:text-red-500'>
                   <svg className='w-6 h-6' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
                     <path strokeLinecap='round' strokeLinejoin='round' strokeWidth='2' d='M6 18L18 6M6 6l12 12' />
                   </svg>
                 </button>
               </div>
+
+              {/* AI Category Generation Section */}
+              <div className='bg-blue-50 p-4 rounded-xl border border-blue-100 mb-6'>
+                <label className='block text-xs font-black text-blue-600 uppercase mb-2'>
+                  Generowanie kategorii przez AI
+                </label>
+                <div className='flex gap-2'>
+                  <input
+                    type='text'
+                    className='flex-1 px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500'
+                    placeholder='Podaj stack, np. Node.js Backend...'
+                    value={categoryAiPrompt}
+                    onChange={(e) => setCategoryAiPrompt(e.target.value)}
+                  />
+                  <button
+                    onClick={handleAiSuggestCategories}
+                    disabled={isSuggestingCategories || !categoryAiPrompt}
+                    className='px-4 py-2 bg-blue-600 text-white font-bold rounded-lg text-xs hover:bg-blue-700 disabled:bg-slate-300 flex items-center gap-1'
+                  >
+                    {isSuggestingCategories ? '...' : 'Sugeruj'}
+                  </button>
+                </div>
+              </div>
+
               <div className='flex gap-2 mb-6'>
                 <input
                   type='text'
-                  className='flex-1 px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900'
-                  placeholder='Nowa...'
+                  className='flex-1 px-4 py-2 border border-slate-200 rounded-lg bg-white outline-none'
+                  placeholder='Nowa kategoria...'
                   value={newCategoryName}
                   onChange={(e) => setNewCategoryName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddCategory()}
                 />
-                <button onClick={handleAddCategory} className='px-4 py-2 bg-blue-600 text-white font-bold rounded-lg'>
+                <button onClick={handleAddCategory} className='px-4 py-2 bg-slate-800 text-white font-bold rounded-lg'>
                   Dodaj
                 </button>
               </div>
-              <div className='space-y-2 max-h-64 overflow-y-auto'>
+
+              <div className='space-y-2 max-h-64 overflow-y-auto pr-2'>
                 {categories.map((cat) => (
                   <div
                     key={cat}
@@ -746,41 +853,55 @@ const App: React.FC = () => {
           <div className='fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4'>
             <div className='bg-white rounded-2xl shadow-2xl p-8 w-full max-w-lg'>
               <h3 className='text-2xl font-bold mb-6 text-slate-800'>
-                {editingQuestion.id ? 'Edytuj (Firebase)' : 'Nowe (Firebase)'}
+                {editingQuestion.id ? 'Edytuj Pytanie' : 'Nowe Pytanie'}
               </h3>
               <form onSubmit={handleSaveQuestion} className='space-y-4'>
-                <div>
-                  <label className='block text-sm font-medium text-slate-600 mb-1'>Kategoria</label>
-                  <select
-                    className='w-full px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900'
-                    value={editingQuestion.category}
-                    required
-                    onChange={(e) => setEditingQuestion({ ...editingQuestion, category: e.target.value })}
-                  >
-                    <option value=''>Wybierz kategorię</option>
-                    {categories.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                  </select>
+                <div className='grid grid-cols-2 gap-4'>
+                  <div>
+                    <label className='block text-sm font-medium text-slate-600 mb-1'>Kategoria</label>
+                    <select
+                      className='w-full px-4 py-2 border border-slate-200 rounded-lg bg-white text-slate-900'
+                      value={editingQuestion.category}
+                      required
+                      onChange={(e) => setEditingQuestion({ ...editingQuestion, category: e.target.value })}
+                    >
+                      {categories.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className='block text-sm font-medium text-slate-600 mb-1'>Trudność</label>
+                    <select
+                      className='w-full px-4 py-2 border border-slate-200 rounded-lg bg-white text-slate-900'
+                      value={editingQuestion.difficulty || 'Mid'}
+                      required
+                      onChange={(e) =>
+                        setEditingQuestion({ ...editingQuestion, difficulty: e.target.value as Difficulty })
+                      }
+                    >
+                      <option value='Junior'>Junior</option>
+                      <option value='Mid'>Mid</option>
+                      <option value='Senior'>Senior</option>
+                    </select>
+                  </div>
                 </div>
                 <div>
                   <label className='block text-sm font-medium text-slate-600 mb-1'>Pytanie</label>
                   <textarea
-                    className='w-full px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 min-h-[100px] bg-white text-slate-900'
+                    className='w-full px-4 py-2 border border-slate-200 rounded-lg min-h-[80px] bg-white text-slate-900'
                     value={editingQuestion.question || ''}
-                    placeholder='Treść...'
                     required
                     onChange={(e) => setEditingQuestion({ ...editingQuestion, question: e.target.value })}
                   />
                 </div>
                 <div>
-                  <label className='block text-sm font-medium text-slate-600 mb-1'>Prawidłowa Odpowiedź</label>
+                  <label className='block text-sm font-medium text-slate-600 mb-1'>Odpowiedź</label>
                   <textarea
-                    className='w-full px-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 min-h-[100px] bg-white text-slate-900'
+                    className='w-full px-4 py-2 border border-slate-200 rounded-lg min-h-[80px] bg-white text-slate-900'
                     value={editingQuestion.correctAnswer || ''}
-                    placeholder='Modelowa odpowiedź...'
                     required
                     onChange={(e) => setEditingQuestion({ ...editingQuestion, correctAnswer: e.target.value })}
                   />
@@ -793,21 +914,18 @@ const App: React.FC = () => {
                     onChange={(e) => setEditingQuestion({ ...editingQuestion, isPrivate: e.target.checked })}
                     className='w-5 h-5 accent-blue-600'
                   />
-                  <label htmlFor='isPrivate' className='text-slate-700 font-medium select-none cursor-pointer'>
-                    Oznacz jako prywatne (widoczne tylko dla Ciebie)
+                  <label htmlFor='isPrivate' className='text-slate-700 font-medium cursor-pointer'>
+                    Prywatne
                   </label>
                 </div>
                 <div className='flex gap-4 pt-4'>
-                  <button
-                    type='submit'
-                    className='flex-1 bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors'
-                  >
-                    Zapisz w Chmurze
+                  <button type='submit' className='flex-1 bg-blue-600 text-white font-bold py-3 rounded-lg'>
+                    Zapisz
                   </button>
                   <button
                     type='button'
                     onClick={() => setEditingQuestion(null)}
-                    className='flex-1 bg-slate-100 text-slate-600 font-bold py-3 rounded-lg hover:bg-slate-200 transition-colors'
+                    className='flex-1 bg-slate-100 text-slate-600 font-bold py-3 rounded-lg'
                   >
                     Anuluj
                   </button>
@@ -829,9 +947,14 @@ const App: React.FC = () => {
                     key={q.id}
                     className='bg-white p-5 rounded-xl border border-slate-200 flex justify-between items-center group'
                   >
-                    <div className='flex-1 pr-8 flex items-center gap-3'>
+                    <div className='flex-1 pr-8 flex flex-wrap items-center gap-3'>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase border ${difficultyColor(q.difficulty)}`}
+                      >
+                        {q.difficulty || 'Mid'}
+                      </span>
                       {q.isPrivate && (
-                        <span className='bg-amber-100 text-amber-700 px-2 py-1 rounded text-[10px] font-black uppercase flex items-center gap-1 shadow-sm shrink-0'>
+                        <span className='bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-black uppercase flex items-center gap-1 shrink-0'>
                           <svg className='w-3 h-3' fill='currentColor' viewBox='0 0 20 20'>
                             <path
                               fillRule='evenodd'
@@ -844,11 +967,8 @@ const App: React.FC = () => {
                       )}
                       <p className='font-semibold text-slate-700'>{q.question}</p>
                     </div>
-                    <div className='flex gap-2'>
-                      <button
-                        onClick={() => setEditingQuestion(q)}
-                        className='p-2 text-slate-400 hover:text-blue-600 transition-colors'
-                      >
+                    <div className='flex gap-2 shrink-0'>
+                      <button onClick={() => setEditingQuestion(q)} className='p-2 text-slate-400 hover:text-blue-600'>
                         <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
                           <path
                             strokeLinecap='round'
@@ -860,7 +980,7 @@ const App: React.FC = () => {
                       </button>
                       <button
                         onClick={() => handleDeleteQuestion(q.id)}
-                        className='p-2 text-slate-400 hover:text-red-500 transition-colors'
+                        className='p-2 text-slate-400 hover:text-red-500'
                       >
                         <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
                           <path
@@ -874,7 +994,6 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 ))}
-                {catGroup.questions.length === 0 && <p className='text-slate-400 text-sm italic'>Brak pytań.</p>}
               </div>
             </div>
           ))}
@@ -883,13 +1002,12 @@ const App: React.FC = () => {
     );
   }
 
-  // View: FORM
   if (view === 'FORM') {
     return (
       <div className='min-h-screen py-12 px-4'>
         <button
           onClick={() => setView('START')}
-          className='mb-8 flex items-center gap-2 text-slate-500 hover:text-blue-600 transition-colors mx-auto max-w-md w-full'
+          className='mb-8 flex items-center gap-2 text-slate-500 hover:text-blue-600 mx-auto max-w-md w-full'
         >
           <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
             <path strokeLinecap='round' strokeLinejoin='round' strokeWidth='2' d='M10 19l-7-7m0 0l7-7m-7 7h18' />
@@ -901,22 +1019,17 @@ const App: React.FC = () => {
     );
   }
 
-  // View: HISTORY
   if (view === 'HISTORY') {
     return (
       <div className='min-h-screen p-6 md:p-12 max-w-4xl mx-auto'>
-        <header className='flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4'>
-          <div>
-            <h1 className='text-3xl font-bold text-slate-800'>Historia (Firebase)</h1>
-          </div>
-          <div className='flex gap-2'>
-            <button
-              onClick={() => setView('START')}
-              className='px-4 py-2 bg-slate-200 text-slate-700 font-bold rounded-lg hover:bg-slate-300 transition-colors'
-            >
-              Menu
-            </button>
-          </div>
+        <header className='flex justify-between items-center mb-8'>
+          <h1 className='text-3xl font-bold text-slate-800'>Historia</h1>
+          <button
+            onClick={() => setView('START')}
+            className='px-4 py-2 bg-slate-200 text-slate-700 font-bold rounded-lg'
+          >
+            Menu
+          </button>
         </header>
         <div className='grid gap-4'>
           {history.map((h, idx) => (
@@ -926,7 +1039,7 @@ const App: React.FC = () => {
                 setSession(h);
                 setView('SUMMARY');
               }}
-              className='bg-white p-6 rounded-2xl shadow-sm border border-slate-200 hover:border-blue-400 cursor-pointer transition-all flex items-center justify-between group'
+              className='bg-white p-6 rounded-2xl border border-slate-200 hover:border-blue-400 cursor-pointer flex items-center justify-between group'
             >
               <div className='flex items-center gap-4'>
                 <div className='w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center font-bold'>
@@ -940,15 +1053,11 @@ const App: React.FC = () => {
               <div className='text-xl font-black text-slate-700'>{calculateTotalAverage(h).toFixed(1)}/5</div>
             </div>
           ))}
-          {history.length === 0 && (
-            <p className='text-center py-12 text-slate-400 italic'>Brak zapisanych rozmów w Firebase.</p>
-          )}
         </div>
       </div>
     );
   }
 
-  // View: INTERVIEW
   if (view === 'INTERVIEW' && session) {
     return (
       <div className='min-h-screen flex flex-col bg-slate-50'>
@@ -967,9 +1076,9 @@ const App: React.FC = () => {
           <button
             onClick={handleFinish}
             disabled={isSummarizing}
-            className={`px-6 py-2 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 shadow-md disabled:bg-slate-200 ${!userAiKey ? 'bg-slate-400 hover:bg-slate-500' : ''}`}
+            className={`px-6 py-2 bg-green-600 text-white rounded-lg font-bold shadow-md ${!userAiKey ? 'bg-slate-400' : ''}`}
           >
-            {isSummarizing ? 'Generowanie...' : !userAiKey ? 'Zakończ (bez AI)' : 'Zakończ z AI'}
+            {isSummarizing ? 'Generowanie...' : 'Zakończ'}
           </button>
         </nav>
         <main className='flex-1 p-6 md:p-8 max-w-5xl mx-auto w-full space-y-12 pb-20'>
@@ -983,21 +1092,14 @@ const App: React.FC = () => {
                   const score = session.scores.find((s) => s.questionId === q.id);
                   const isExpanded = expandedQuestion === q.id;
                   return (
-                    <div
-                      key={q.id}
-                      className='bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow'
-                    >
+                    <div key={q.id} className='bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm'>
                       <div className='p-5 flex flex-col md:flex-row md:items-center justify-between gap-4'>
-                        <div className='flex-1 pr-4 flex items-center gap-3'>
-                          {q.isPrivate && (
-                            <svg className='w-4 h-4 text-amber-500 shrink-0' fill='currentColor' viewBox='0 0 20 20'>
-                              <path
-                                fillRule='evenodd'
-                                d='M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z'
-                                clipRule='evenodd'
-                              />
-                            </svg>
-                          )}
+                        <div className='flex-1 pr-4 flex flex-wrap items-center gap-3'>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase border ${difficultyColor(q.difficulty)}`}
+                          >
+                            {q.difficulty || 'Mid'}
+                          </span>
                           <h3 className='text-lg font-semibold text-slate-700'>{q.question}</h3>
                         </div>
                         <div className='flex items-center gap-4 shrink-0'>
@@ -1038,7 +1140,6 @@ const App: React.FC = () => {
     );
   }
 
-  // View: SUMMARY
   if (view === 'SUMMARY' && session) {
     return (
       <div className='min-h-screen p-6 md:p-12 max-w-4xl mx-auto'>
@@ -1058,32 +1159,13 @@ const App: React.FC = () => {
               <p className='text-slate-500'>{session.candidate.name}</p>
             </div>
             <div className='text-right'>
-              <span className='text-xs font-black text-slate-400 uppercase block mb-1'>Wynik Ogólny</span>
               <div className='text-4xl font-black text-blue-600'>{calculateTotalAverage(session).toFixed(1)}/5.0</div>
             </div>
           </header>
-
-          <section className='grid grid-cols-2 md:grid-cols-3 gap-4 mb-10'>
-            {categories.map((cat) => {
-              const avg = calculateCategoryAverage(cat, session);
-              if (avg === 0) return null;
-              return (
-                <div key={cat} className='p-4 bg-slate-50 rounded-xl border border-slate-100'>
-                  <div className='text-xs font-bold text-slate-400 uppercase'>{cat}</div>
-                  <div className='text-xl font-bold text-slate-700'>{avg.toFixed(1)} / 5</div>
-                </div>
-              );
-            })}
-          </section>
-
           <div className='prose max-w-none text-slate-700 bg-blue-50/50 p-6 rounded-xl border border-blue-100 whitespace-pre-wrap leading-relaxed shadow-inner mb-10'>
             {session.aiSummary}
           </div>
-
-          <button
-            onClick={() => setView('START')}
-            className='w-full py-4 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 shadow-lg transition-all'
-          >
+          <button onClick={() => setView('START')} className='w-full py-4 bg-slate-800 text-white font-bold rounded-xl'>
             Zamknij i Wróć
           </button>
         </div>

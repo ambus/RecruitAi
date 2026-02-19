@@ -1,3 +1,5 @@
+export type Difficulty = 'Junior' | 'Mid' | 'Senior';
+
 export interface Question {
   id: string;
   category: string;
@@ -5,6 +7,7 @@ export interface Question {
   correctAnswer: string;
   isPrivate?: boolean;
   createdBy?: string;
+  difficulty?: Difficulty;
 }
 
 export interface Score {

@@ -23,7 +23,7 @@ import {
 import { generateInterviewSummary, generateNewQuestions } from './services/geminiService';
 import { Candidate, InterviewSession, Question } from './types';
 
-type View = 'START' | 'FORM' | 'INTERVIEW' | 'HISTORY' | 'SUMMARY' | 'QUESTIONS_MGMT';
+type View = 'START' | 'FORM' | 'INTERVIEW' | 'HISTORY' | 'SUMMARY' | 'QUESTIONS_MGMT' | 'SETTINGS';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -36,6 +36,9 @@ const App: React.FC = () => {
   const [expandedQuestion, setExpandedQuestion] = useState<string | null>(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
 
+  // User Settings state
+  const [userAiKey, setUserAiKey] = useState<string>(localStorage.getItem('gemini_api_key') || '');
+
   // Management states
   const [editingQuestion, setEditingQuestion] = useState<Partial<Question> | null>(null);
   const [showCategoryMgmt, setShowCategoryMgmt] = useState(false);
@@ -47,7 +50,6 @@ const App: React.FC = () => {
   const [aiGenParams, setAiGenParams] = useState({ category: '', topic: '', count: 3 });
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
 
-  const historyFileInputRef = useRef<HTMLInputElement>(null);
   const questionsFileInputRef = useRef<HTMLInputElement>(null);
 
   // Auth Listener
@@ -79,7 +81,6 @@ const App: React.FC = () => {
       const qs: Question[] = [];
       snap.forEach((d) => {
         const data = d.data() as Question;
-        // Visible if: Public OR created by current user OR it is one of the initial questions (no createdBy)
         const isVisible = !data.isPrivate || data.createdBy === user.uid || !data.createdBy;
         if (isVisible) {
           qs.push({ id: d.id, ...data });
@@ -155,7 +156,6 @@ const App: React.FC = () => {
         if (confirm('Import zsynchronizuje dane z Firebase. Kontynuować?')) {
           for (const q of importedQuestions) {
             const { id, ...data } = q;
-            // When importing, mark as owned by user if not specified
             await addDoc(collection(db, 'questions'), {
               ...data,
               createdBy: data.createdBy || user?.uid,
@@ -215,8 +215,6 @@ const App: React.FC = () => {
     if (id) {
       await updateDoc(doc(db, 'questions', id), {
         ...data,
-        // Optional: you might want to prevent others from editing your questions via Firestore rules,
-        // but here we ensure the UI matches the owner.
       });
     } else {
       await addDoc(collection(db, 'questions'), {
@@ -237,22 +235,32 @@ const App: React.FC = () => {
   const handleAiGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!aiGenParams.category) return;
+    if (!userAiKey) {
+      alert('Najpierw skonfiguruj klucz Gemini API w ustawieniach!');
+      setView('SETTINGS');
+      return;
+    }
 
     setIsGeneratingAi(true);
     try {
-      const newQuestions = await generateNewQuestions(aiGenParams.category, aiGenParams.topic, aiGenParams.count);
+      const newQuestions = await generateNewQuestions(
+        userAiKey,
+        aiGenParams.category,
+        aiGenParams.topic,
+        aiGenParams.count,
+      );
       for (const q of newQuestions) {
         await addDoc(collection(db, 'questions'), {
           ...q,
           category: aiGenParams.category,
           createdBy: user?.uid,
-          isPrivate: false, // Default to public for AI generated if wanted, or could be private
+          isPrivate: false,
         });
       }
       setShowAiGen(false);
       alert(`Wygenerowano i zapisano w Firebase ${newQuestions.length} pytań.`);
-    } catch (err) {
-      alert('Wystąpił błąd podczas generowania pytań.');
+    } catch (err: unknown) {
+      alert((err as Error).message || 'Wystąpił błąd podczas generowania pytań.');
     } finally {
       setIsGeneratingAi(false);
     }
@@ -277,13 +285,25 @@ const App: React.FC = () => {
 
   const handleFinish = async () => {
     if (!session) return;
-    setIsSummarizing(true);
-    const summary = await generateInterviewSummary(session, questions);
+
+    let summary = 'Podsumowanie niedostępne (brak klucza API).';
+    if (userAiKey) {
+      setIsSummarizing(true);
+      summary = await generateInterviewSummary(userAiKey, session, questions);
+    }
+
     const completedSession = { ...session, isCompleted: true, aiSummary: summary };
     setSession(completedSession);
     await saveToHistory(completedSession);
     setIsSummarizing(false);
     setView('SUMMARY');
+  };
+
+  const handleSaveAiKey = (e: React.FormEvent) => {
+    e.preventDefault();
+    localStorage.setItem('gemini_api_key', userAiKey);
+    alert('Klucz API został zapisany lokalnie.');
+    setView('START');
   };
 
   const calculateCategoryAverage = (cat: string, targetSession: InterviewSession | null) => {
@@ -341,8 +361,23 @@ const App: React.FC = () => {
   // View: START
   if (view === 'START') {
     return (
-      <div className='min-h-screen flex flex-col items-center justify-center p-4 bg-slate-50'>
+      <div className='min-h-screen flex flex-col items-center justify-center p-4 bg-slate-50 relative'>
         <div className='absolute top-6 right-6 flex items-center gap-4'>
+          <button
+            onClick={() => setView('SETTINGS')}
+            className='p-2 bg-white border border-slate-200 rounded-full text-slate-500 hover:text-blue-600 transition-colors shadow-sm'
+            title='Ustawienia AI'
+          >
+            <svg className='w-6 h-6' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+              <path
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                strokeWidth='2'
+                d='M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z'
+              />
+              <path strokeLinecap='round' strokeLinejoin='round' strokeWidth='2' d='M15 12a3 3 0 11-6 0 3 3 0 016 0z' />
+            </svg>
+          </button>
           <div className='text-right'>
             <p className='text-sm font-bold text-slate-800'>{user.displayName}</p>
             <button onClick={handleLogout} className='text-xs text-red-500 hover:underline'>
@@ -356,6 +391,26 @@ const App: React.FC = () => {
           Recruit<span className='text-blue-600'>AI</span>
         </h1>
         <p className='text-slate-500 mb-12 text-lg text-center'>Chmurowy asystent rekrutacji technicznej</p>
+
+        {!userAiKey && (
+          <div className='bg-amber-50 border border-amber-100 text-amber-700 px-6 py-4 rounded-2xl mb-8 flex items-center gap-4 max-w-lg'>
+            <svg className='w-6 h-6 shrink-0' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+              <path
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                strokeWidth='2'
+                d='M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'
+              />
+            </svg>
+            <p className='text-sm'>
+              Brak klucza API Gemini. Funkcje generowania pytań i podsumowań AI będą niedostępne.
+              <button onClick={() => setView('SETTINGS')} className='ml-2 font-bold underline'>
+                Skonfiguruj teraz
+              </button>
+            </p>
+          </div>
+        )}
+
         <div className='grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl'>
           <button
             onClick={() => setView('FORM')}
@@ -405,6 +460,65 @@ const App: React.FC = () => {
     );
   }
 
+  // View: SETTINGS
+  if (view === 'SETTINGS') {
+    return (
+      <div className='min-h-screen flex flex-col items-center justify-center p-4 bg-slate-50'>
+        <div className='bg-white p-10 rounded-3xl shadow-2xl border border-slate-100 max-w-lg w-full'>
+          <button
+            onClick={() => setView('START')}
+            className='mb-6 flex items-center gap-2 text-slate-500 hover:text-blue-600 transition-colors'
+          >
+            <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+              <path strokeLinecap='round' strokeLinejoin='round' strokeWidth='2' d='M10 19l-7-7m0 0l7-7m-7 7h18' />
+            </svg>
+            Powrót
+          </button>
+
+          <h2 className='text-3xl font-black text-slate-800 mb-2'>Ustawienia Usera</h2>
+          <p className='text-slate-500 mb-8'>Skonfiguruj swój klucz do Gemini AI</p>
+
+          <form onSubmit={handleSaveAiKey} className='space-y-6'>
+            <div>
+              <label className='block text-sm font-black text-slate-600 mb-2 uppercase tracking-wide'>
+                Klucz Gemini API
+              </label>
+              <input
+                type='password'
+                value={userAiKey}
+                onChange={(e) => setUserAiKey(e.target.value)}
+                placeholder='Wklej swój klucz tutaj...'
+                className='w-full px-5 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 text-slate-900 transition-all font-mono'
+                required
+              />
+              <p className='mt-3 text-sm text-slate-500 leading-relaxed'>
+                Klucz zostanie zapisany wyłącznie w Twojej przeglądarce (localStorage). Możesz go wygenerować za darmo w
+                <a
+                  href='https://aistudio.google.com/'
+                  target='_blank'
+                  rel='noopener noreferrer'
+                  className='text-blue-600 font-bold hover:underline ml-1'
+                >
+                  Google AI Studio
+                </a>
+                .
+              </p>
+            </div>
+
+            <div className='pt-4'>
+              <button
+                type='submit'
+                className='w-full py-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg transition-all'
+              >
+                Zapisz Ustawienia
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   // View: QUESTIONS_MGMT
   if (view === 'QUESTIONS_MGMT') {
     return (
@@ -417,7 +531,9 @@ const App: React.FC = () => {
           <div className='flex flex-wrap gap-2'>
             <button
               onClick={() => setShowAiGen(true)}
-              className='px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold rounded-lg hover:opacity-90 transition-all shadow-md flex items-center gap-2'
+              disabled={!userAiKey}
+              className={`px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold rounded-lg hover:opacity-90 transition-all shadow-md flex items-center gap-2 ${!userAiKey ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title={!userAiKey ? 'Skonfiguruj klucz API w ustawieniach' : ''}
             >
               <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
                 <path strokeLinecap='round' strokeLinejoin='round' strokeWidth='2' d='M13 10V3L4 14h7v7l9-11h-7z' />
@@ -851,9 +967,9 @@ const App: React.FC = () => {
           <button
             onClick={handleFinish}
             disabled={isSummarizing}
-            className='px-6 py-2 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 shadow-md disabled:bg-slate-200'
+            className={`px-6 py-2 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 shadow-md disabled:bg-slate-200 ${!userAiKey ? 'bg-slate-400 hover:bg-slate-500' : ''}`}
           >
-            {isSummarizing ? 'Generowanie...' : 'Zakończ'}
+            {isSummarizing ? 'Generowanie...' : !userAiKey ? 'Zakończ (bez AI)' : 'Zakończ z AI'}
           </button>
         </nav>
         <main className='flex-1 p-6 md:p-8 max-w-5xl mx-auto w-full space-y-12 pb-20'>

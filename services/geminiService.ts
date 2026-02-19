@@ -1,8 +1,13 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { InterviewSession, Question } from '../types';
 
-export async function generateInterviewSummary(session: InterviewSession, allQuestions: Question[]): Promise<string> {
-  const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+export async function generateInterviewSummary(
+  apiKey: string,
+  session: InterviewSession,
+  allQuestions: Question[],
+): Promise<string> {
+  if (!apiKey) throw new Error('Brak klucza API Gemini');
+  const ai = new GoogleGenAI({ apiKey });
 
   const scoredData = session.scores.map((s) => {
     const q = allQuestions.find((q) => q.id === s.questionId);
@@ -38,16 +43,18 @@ export async function generateInterviewSummary(session: InterviewSession, allQue
     return response.text || 'Nie udało się wygenerować podsumowania.';
   } catch (error) {
     console.error('Gemini Error:', error);
-    return 'Wystąpił błąd podczas generowania podsumowania przez AI.';
+    return 'Wystąpił błąd podczas generowania podsumowania przez AI. Sprawdź poprawność klucza API w ustawieniach.';
   }
 }
 
 export async function generateNewQuestions(
+  apiKey: string,
   category: string,
   topic: string,
   count: number,
 ): Promise<Partial<Question>[]> {
-  const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+  if (!apiKey) throw new Error('Brak klucza API Gemini');
+  const ai = new GoogleGenAI({ apiKey });
 
   const prompt = `Wygeneruj ${count} pytań rekrutacyjnych wraz z prawidłowymi odpowiedziami dla kategorii "${category}". 
   Temat przewodni: ${topic || 'ogólna wiedza techniczna'}.
@@ -77,6 +84,6 @@ export async function generateNewQuestions(
     return JSON.parse(response.text);
   } catch (error) {
     console.error('AI Question Generation Error:', error);
-    throw new Error('Nie udało się wygenerować pytań przez AI.');
+    throw new Error('Nie udało się wygenerować pytań przez AI. Sprawdź poprawność klucza API w ustawieniach.');
   }
 }

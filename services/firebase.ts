@@ -13,6 +13,7 @@ import {
   query,
   setDoc,
   updateDoc,
+  where,
 } from 'firebase/firestore';
 
 /**
@@ -57,5 +58,6 @@ export {
   signInWithPopup,
   signOut,
   updateDoc,
+  where,
 };
 export type { User };

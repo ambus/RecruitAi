@@ -28,4 +28,5 @@ export interface InterviewSession {
   isCompleted: boolean;
   aiSummary?: string;
   overallComment?: string;
+  createdBy?: string;
 }

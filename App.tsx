@@ -20,6 +20,7 @@ import {
   signOut,
   updateDoc,
   User,
+  where,
 } from './services/firebase';
 import { generateCategorySuggestions, generateInterviewSummary, generateNewQuestions } from './services/geminiService';
 import { Candidate, Difficulty, InterviewSession, Question } from './types';
@@ -124,7 +125,12 @@ const App: React.FC = () => {
       setQuestions(qs.length > 0 ? qs : INITIAL_QUESTIONS);
     });
 
-    const hQuery = query(collection(db, 'interviews'), orderBy('candidate.interviewDate', 'desc'));
+    // Filtrowanie historii: tylko rozmowy utworzone przez aktualnego użytkownika
+    const hQuery = query(
+      collection(db, 'interviews'),
+      where('createdBy', '==', user.uid),
+      orderBy('candidate.interviewDate', 'desc'),
+    );
     const unsubHistory = onSnapshot(hQuery, (snap) => {
       const hs: InterviewSession[] = [];
       snap.forEach((d) => hs.push(d.data() as InterviewSession));
@@ -152,7 +158,11 @@ const App: React.FC = () => {
 
   const saveToHistory = async (completedSession: InterviewSession) => {
     try {
-      await addDoc(collection(db, 'interviews'), completedSession);
+      // Upewniamy się, że createdBy jest ustawione przed zapisem
+      await addDoc(collection(db, 'interviews'), {
+        ...completedSession,
+        createdBy: user?.uid,
+      });
     } catch (error) {
       console.error('Failed to save history to Firebase', error);
     }
@@ -300,7 +310,7 @@ const App: React.FC = () => {
   };
 
   const handleStartInterview = (candidate: Candidate) => {
-    setSession({ candidate, scores: [], isCompleted: false, overallComment: '' });
+    setSession({ candidate, scores: [], isCompleted: false, overallComment: '', createdBy: user?.uid });
     setView('INTERVIEW');
   };
 
@@ -330,7 +340,7 @@ const App: React.FC = () => {
       summary = await generateInterviewSummary(userAiKey, session, questions);
     }
 
-    const completedSession = { ...session, isCompleted: true, aiSummary: summary };
+    const completedSession = { ...session, isCompleted: true, aiSummary: summary, createdBy: user?.uid };
     setSession(completedSession);
     await saveToHistory(completedSession);
     setIsSummarizing(false);
@@ -1037,27 +1047,31 @@ const App: React.FC = () => {
           </button>
         </header>
         <div className='grid gap-4'>
-          {history.map((h, idx) => (
-            <div
-              key={idx}
-              onClick={() => {
-                setSession(h);
-                setView('SUMMARY');
-              }}
-              className='bg-white p-6 rounded-2xl border border-slate-200 hover:border-blue-400 cursor-pointer flex items-center justify-between group'
-            >
-              <div className='flex items-center gap-4'>
-                <div className='w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center font-bold'>
-                  {h.candidate.name.charAt(0)}
+          {history.length > 0 ? (
+            history.map((h, idx) => (
+              <div
+                key={idx}
+                onClick={() => {
+                  setSession(h);
+                  setView('SUMMARY');
+                }}
+                className='bg-white p-6 rounded-2xl border border-slate-200 hover:border-blue-400 cursor-pointer flex items-center justify-between group'
+              >
+                <div className='flex items-center gap-4'>
+                  <div className='w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center font-bold'>
+                    {h.candidate.name.charAt(0)}
+                  </div>
+                  <div>
+                    <h3 className='font-bold text-slate-800'>{h.candidate.name}</h3>
+                    <p className='text-slate-400 text-sm'>{h.candidate.interviewDate}</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className='font-bold text-slate-800'>{h.candidate.name}</h3>
-                  <p className='text-slate-400 text-sm'>{h.candidate.interviewDate}</p>
-                </div>
+                <div className='text-xl font-black text-slate-700'>{calculateTotalAverage(h).toFixed(1)}/5</div>
               </div>
-              <div className='text-xl font-black text-slate-700'>{calculateTotalAverage(h).toFixed(1)}/5</div>
-            </div>
-          ))}
+            ))
+          ) : (
+            <p className='text-center text-slate-500 py-10'>Nie masz jeszcze zapisanych żadnych rozmów.</p>
+          )}
         </div>
       </div>
     );

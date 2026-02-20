@@ -21,8 +21,16 @@ const App: React.FC = () => {
   const auth = useAuth();
   const firebaseData = useFirebaseData(auth.user?.uid, auth.isAuthorized);
 
-  const handleStartInterview = (candidate: Candidate) => {
-    setSession({ candidate, scores: [], isCompleted: false, overallComment: '', createdBy: auth.user?.uid });
+  const handleStartInterview = (candidate: Candidate, positionName: string, requirementsDescription: string) => {
+    setSession({
+      candidate,
+      positionName,
+      requirementsDescription,
+      scores: [],
+      isCompleted: false,
+      overallComment: '',
+      createdBy: auth.user?.uid,
+    });
     setView('INTERVIEW');
   };
 

@@ -2,21 +2,27 @@ import React, { useState } from 'react';
 import { Candidate } from '../../types';
 
 interface CandidateViewProps {
-  onStart: (candidate: Candidate) => void;
+  onStart: (candidate: Candidate, positionName: string, requirementsDescription: string) => void;
 }
 
 export const CandidateView: React.FC<CandidateViewProps> = ({ onStart }) => {
   const [name, setName] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [positionName, setPositionName] = useState('');
+  const [requirementsDescription, setRequirementsDescription] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name) return;
-    onStart({
-      id: Math.random().toString(36).substr(2, 9),
-      name,
-      interviewDate: date,
-    });
+    if (!name || !positionName || !requirementsDescription) return;
+    onStart(
+      {
+        id: Math.random().toString(36).substr(2, 9),
+        name,
+        interviewDate: date,
+      },
+      positionName,
+      requirementsDescription,
+    );
   };
 
   return (
@@ -41,6 +47,27 @@ export const CandidateView: React.FC<CandidateViewProps> = ({ onStart }) => {
             value={date}
             onChange={(e) => setDate(e.target.value)}
             className='w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all bg-white text-slate-900'
+          />
+        </div>
+        <div>
+          <label className='block text-sm font-medium text-slate-600 mb-1'>Nazwa stanowiska</label>
+          <input
+            type='text'
+            value={positionName}
+            onChange={(e) => setPositionName(e.target.value)}
+            className='w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all bg-white text-slate-900'
+            placeholder='np. Junior Frontend Developer'
+            required
+          />
+        </div>
+        <div>
+          <label className='block text-sm font-medium text-slate-600 mb-1'>Opis wymagań</label>
+          <textarea
+            value={requirementsDescription}
+            onChange={(e) => setRequirementsDescription(e.target.value)}
+            className='w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all bg-white text-slate-900 min-h-[100px]'
+            placeholder='np. React, TypeScript, TailwindCSS...'
+            required
           />
         </div>
         <button

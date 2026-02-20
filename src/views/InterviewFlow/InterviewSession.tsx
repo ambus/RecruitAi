@@ -113,12 +113,18 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
     let summary = 'Podsumowanie niedostępne (brak klucza API).';
     const allSessionQuestionsForSummary = [...questions, ...(session.temporaryQuestions || [])];
 
-    if (userAiKey) {
+    const validScores = session.scores.filter((s) => s.rating > 0);
+    const validQuestionIds = validScores.map((s) => s.questionId);
+    const answeredQuestions = allSessionQuestionsForSummary.filter((q) => validQuestionIds.includes(q.id));
+
+    const sessionWithValidScores = { ...session, scores: validScores };
+
+    if (userAiKey && validScores.length > 0) {
       setIsSummarizing(true);
       try {
         // Dodajemy timeout zabezpieczający przed zawieszeniem w przypadku braku połączenia
         summary = await Promise.race([
-          generateInterviewSummary(userAiKey, session, allSessionQuestionsForSummary),
+          generateInterviewSummary(userAiKey, sessionWithValidScores, answeredQuestions),
           new Promise<string>((_, reject) =>
             setTimeout(() => reject(new Error('Przekroczono czas oczekiwania na połączenie z AI.')), 20000),
           ),
@@ -127,9 +133,24 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
         console.error(e);
         summary = 'Podsumowanie niedostępne (brak połączenia z AI lub błąd): ' + (e.message || '');
       }
+    } else if (validScores.length === 0) {
+      summary = 'Brak ocenionych pytań do podsumowania.';
     }
 
-    const completedSession = { ...session, isCompleted: true, aiSummary: summary, createdBy: userUid };
+    const askedQuestionsSnapshot = answeredQuestions.map((q) => ({
+      id: q.id,
+      category: q.category,
+      question: q.question,
+      difficulty: q.difficulty,
+    }));
+
+    const completedSession = {
+      ...sessionWithValidScores,
+      isCompleted: true,
+      aiSummary: summary,
+      createdBy: userUid,
+      askedQuestions: askedQuestionsSnapshot,
+    };
     setSession(completedSession);
     await saveToHistory(completedSession);
     setIsSummarizing(false);
@@ -148,7 +169,20 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
               <path strokeLinecap='round' strokeLinejoin='round' strokeWidth='2' d='M6 18L18 6M6 6l12 12' />
             </svg>
           </button>
-          <h1 className='text-xl font-bold text-slate-800'>{session.candidate.name}</h1>
+          <h1 className='text-xl font-bold text-slate-800 flex flex-col'>
+            {session.candidate.name}
+            <span className='text-sm font-normal text-slate-500 flex items-center gap-2'>
+              <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                <path
+                  strokeLinecap='round'
+                  strokeLinejoin='round'
+                  strokeWidth='2'
+                  d='M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z'
+                />
+              </svg>
+              {session.positionName} - {session.candidate.interviewDate}
+            </span>
+          </h1>
         </div>
         <button
           onClick={handleFinish}
@@ -159,6 +193,21 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
         </button>
       </nav>
       <main className='flex-1 p-6 md:p-8 max-w-5xl mx-auto w-full space-y-12 pb-20'>
+        <section className='bg-indigo-50 border border-indigo-100 rounded-2xl p-6'>
+          <h2 className='text-sm font-black text-indigo-800 uppercase tracking-wider mb-2 flex items-center gap-2'>
+            <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+              <path
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                strokeWidth='2'
+                d='M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2'
+              />
+            </svg>
+            Wymagania na stanowisko
+          </h2>
+          <p className='text-indigo-900 whitespace-pre-wrap'>{session.requirementsDescription}</p>
+        </section>
+
         {questionsByCategory.map((category) => (
           <section key={category.name} className='space-y-4'>
             <h2 className='text-2xl font-black text-slate-800 border-l-4 border-blue-600 pl-4 py-1'>{category.name}</h2>

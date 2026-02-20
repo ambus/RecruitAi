@@ -21,11 +21,20 @@ export interface Candidate {
   name: string;
   interviewDate: string;
 }
+export interface AskedQuestion {
+  id: string;
+  category: string;
+  question: string;
+  difficulty?: Difficulty;
+}
 
 export interface InterviewSession {
   id?: string;
   candidate: Candidate;
+  positionName: string;
+  requirementsDescription: string;
   scores: Score[];
+  askedQuestions?: AskedQuestion[];
   isCompleted: boolean;
   aiSummary?: string;
   aiSummaryTranslated?: string;

@@ -35,7 +35,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ history, setView, setS
                 </div>
                 <div>
                   <h3 className='font-bold text-slate-800'>{h.candidate.name}</h3>
-                  <p className='text-slate-400 text-sm'>{h.candidate.interviewDate}</p>
+                  <div className='flex gap-2 items-center text-sm text-slate-500'>
+                    <span className='font-medium text-slate-600'>{h.positionName}</span>
+                    <span>•</span>
+                    <span>{h.candidate.interviewDate}</span>
+                  </div>
                 </div>
               </div>
               <div className='flex items-center gap-4'>

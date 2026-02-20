@@ -99,7 +99,15 @@ const App: React.FC = () => {
         }
 
         if (view === 'SUMMARY' && session) {
-          return <InterviewSummaryView session={session} setView={setView} />;
+          return (
+            <InterviewSummaryView
+              session={session}
+              setView={setView}
+              setSession={setSession}
+              saveToHistory={firebaseData.saveToHistory}
+              userAiKey={userAiKey}
+            />
+          );
         }
 
         return null;

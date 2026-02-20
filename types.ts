@@ -28,6 +28,7 @@ export interface InterviewSession {
   scores: Score[];
   isCompleted: boolean;
   aiSummary?: string;
+  aiSummaryTranslated?: string;
   temporaryQuestions?: Question[];
   overallComment?: string;
   createdBy?: string;

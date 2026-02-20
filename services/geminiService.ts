@@ -121,3 +121,26 @@ export async function generateCategorySuggestions(apiKey: string, techStack: str
     throw new Error('Nie udało się wygenerować sugestii kategorii.');
   }
 }
+
+export async function translateSummaryToEnglish(apiKey: string, summary: string): Promise<string> {
+  if (!apiKey) throw new Error('Brak klucza API Gemini');
+  const ai = new GoogleGenAI({ apiKey });
+
+  const prompt = `Przetłumacz poniższe podsumowanie rozmowy rekrutacyjnej na profesjonalny język angielski.
+Zachowaj formatowanie Markdown.
+
+Tekst do przetłumaczenia:
+${summary}
+`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+    });
+    return response.text || summary;
+  } catch (error) {
+    console.error('Gemini Translation Error:', error);
+    throw new Error('Nie udało się przetłumaczyć podsumowania.');
+  }
+}

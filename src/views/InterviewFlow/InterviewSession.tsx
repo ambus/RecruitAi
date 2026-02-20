@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View } from '../../../App';
-import { generateInterviewSummary } from '../../../services/geminiService';
-import { InterviewSession, Question } from '../../../types';
+import { generateInterviewSummary, generateNewQuestions } from '../../../services/geminiService';
+import { Difficulty, InterviewSession, Question } from '../../../types';
 import { difficultyColor } from '../../utils/helpers';
 import RatingScale from './RatingScale';
 
@@ -29,10 +29,73 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [expandedQuestion, setExpandedQuestion] = useState<string | null>(null);
 
-  const questionsByCategory = categories.map((cat) => ({
-    name: cat,
-    questions: questions.filter((q) => q.category === cat),
-  }));
+  const [isGeneratingQuestion, setIsGeneratingQuestion] = useState(false);
+  const [generationCategory, setGenerationCategory] = useState(categories[0] || '');
+  const [generationTopic, setGenerationTopic] = useState('');
+  const [generationDifficulty, setGenerationDifficulty] = useState<Difficulty>('Mid');
+
+  const [isAddingManualQuestion, setIsAddingManualQuestion] = useState(false);
+  const [manualQuestionText, setManualQuestionText] = useState('');
+  const [manualCategory, setManualCategory] = useState(categories[0] || '');
+  const [manualDifficulty, setManualDifficulty] = useState<Difficulty>('Mid');
+  const [manualCorrectAnswer, setManualCorrectAnswer] = useState('');
+
+  const allSessionQuestions = [...questions, ...(session.temporaryQuestions || [])];
+  const allCategories = Array.from(
+    new Set([...categories, ...(session.temporaryQuestions?.map((q) => q.category) || [])]),
+  );
+
+  const questionsByCategory = allCategories
+    .map((cat) => ({
+      name: cat,
+      questions: allSessionQuestions.filter((q) => q.category === cat),
+    }))
+    .filter((cat) => cat.questions.length > 0);
+
+  const handleGenerateQuestion = async () => {
+    if (!userAiKey) {
+      alert('Brak klucza API do wygenerowania pytania.');
+      return;
+    }
+    const targetCat = generationCategory || categories[0] || 'Inne';
+    setIsGeneratingQuestion(true);
+    try {
+      const newQs = await generateNewQuestions(userAiKey, targetCat, generationTopic, 1, generationDifficulty);
+      if (newQs && newQs.length > 0) {
+        const generatedQ: Question = {
+          id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          category: targetCat,
+          question: newQs[0].question || '',
+          correctAnswer: newQs[0].correctAnswer || '',
+          difficulty: generationDifficulty,
+        };
+        const currentTempQs = session.temporaryQuestions || [];
+        setSession({ ...session, temporaryQuestions: [...currentTempQs, generatedQ] });
+        setGenerationTopic('');
+      }
+    } catch (e: any) {
+      alert('Błąd podczas generowania: ' + (e.message || ''));
+    } finally {
+      setIsGeneratingQuestion(false);
+    }
+  };
+
+  const handleAddManualQuestion = () => {
+    if (!manualQuestionText.trim()) return;
+    const targetCat = manualCategory || categories[0] || 'Inne';
+    const newQ: Question = {
+      id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      category: targetCat,
+      question: manualQuestionText,
+      correctAnswer: manualCorrectAnswer || 'Brak',
+      difficulty: manualDifficulty,
+    };
+    const currentTempQs = session.temporaryQuestions || [];
+    setSession({ ...session, temporaryQuestions: [...currentTempQs, newQ] });
+    setManualQuestionText('');
+    setManualCorrectAnswer('');
+    setIsAddingManualQuestion(false);
+  };
 
   const handleRate = (questionId: string, rating: number) => {
     const existingIdx = session.scores.findIndex((s) => s.questionId === questionId);
@@ -48,12 +111,14 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
 
   const handleFinish = async () => {
     let summary = 'Podsumowanie niedostępne (brak klucza API).';
+    const allSessionQuestionsForSummary = [...questions, ...(session.temporaryQuestions || [])];
+
     if (userAiKey) {
       setIsSummarizing(true);
       try {
         // Dodajemy timeout zabezpieczający przed zawieszeniem w przypadku braku połączenia
         summary = await Promise.race([
-          generateInterviewSummary(userAiKey, session, questions),
+          generateInterviewSummary(userAiKey, session, allSessionQuestionsForSummary),
           new Promise<string>((_, reject) =>
             setTimeout(() => reject(new Error('Przekroczono czas oczekiwania na połączenie z AI.')), 20000),
           ),
@@ -145,6 +210,156 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
             </div>
           </section>
         ))}
+
+        <section className='pt-8 border-t border-slate-200'>
+          <h2 className='text-2xl font-black text-slate-800 border-l-4 border-indigo-600 pl-4 py-1 mb-4 flex items-center justify-between'>
+            Dodaj punktowane pytanie
+            <span className='text-sm font-normal text-indigo-700 bg-indigo-100 px-3 py-1 rounded-full'>
+              Tymczasowe na czas rozmowy
+            </span>
+          </h2>
+          <div className='bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-6 mb-8'>
+            <div className='flex gap-4 border-b border-slate-200 pb-4'>
+              <button
+                onClick={() => setIsAddingManualQuestion(false)}
+                className={`flex-1 py-2 rounded-lg font-bold transition-colors ${!isAddingManualQuestion ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+              >
+                Wygeneruj przez AI
+              </button>
+              <button
+                onClick={() => setIsAddingManualQuestion(true)}
+                className={`flex-1 py-2 rounded-lg font-bold transition-colors ${isAddingManualQuestion ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+              >
+                Dodaj Ręcznie
+              </button>
+            </div>
+
+            {!isAddingManualQuestion ? (
+              <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
+                <div className='space-y-2'>
+                  <label className='block text-sm font-bold text-slate-700'>Kategoria</label>
+                  <select
+                    className='w-full p-2 border border-slate-200 rounded-lg bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none'
+                    value={generationCategory}
+                    onChange={(e) => setGenerationCategory(e.target.value)}
+                  >
+                    {allCategories.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className='space-y-2'>
+                  <label className='block text-sm font-bold text-slate-700'>Poziom trudności</label>
+                  <select
+                    className='w-full p-2 border border-slate-200 rounded-lg bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none'
+                    value={generationDifficulty}
+                    onChange={(e) => setGenerationDifficulty(e.target.value as Difficulty)}
+                  >
+                    <option value='Junior'>Junior</option>
+                    <option value='Mid'>Mid</option>
+                    <option value='Senior'>Senior</option>
+                  </select>
+                </div>
+                <div className='space-y-2 md:col-span-2'>
+                  <label className='block text-sm font-bold text-slate-700'>Temat poboczny (opcjonalnie)</label>
+                  <input
+                    type='text'
+                    className='w-full p-2 border border-slate-200 rounded-lg bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none'
+                    placeholder='np. React Hooks zapytania do API, Optymalizacja...'
+                    value={generationTopic}
+                    onChange={(e) => setGenerationTopic(e.target.value)}
+                  />
+                </div>
+                <div className='md:col-span-2 flex justify-end pt-2'>
+                  <button
+                    onClick={handleGenerateQuestion}
+                    disabled={isGeneratingQuestion || !userAiKey}
+                    className={`px-6 py-2 rounded-lg font-bold shadow-md text-white ${isGeneratingQuestion || !userAiKey ? 'bg-indigo-300' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                  >
+                    {isGeneratingQuestion
+                      ? 'Trwa generowanie...'
+                      : userAiKey
+                        ? '✨ Wygeneruj i dodaj'
+                        : 'Brak klucza API'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
+                <div className='space-y-2'>
+                  <label className='block text-sm font-bold text-slate-700'>Kategoria</label>
+                  <div className='flex gap-2 w-full'>
+                    <select
+                      className='w-full p-2 border border-slate-200 rounded-lg bg-slate-50 flex-1 focus:ring-2 focus:ring-indigo-500 outline-none'
+                      value={manualCategory}
+                      onChange={(e) => setManualCategory(e.target.value)}
+                    >
+                      {allCategories.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      title='Wpisz nową kategorię'
+                      onClick={() => {
+                        const newCat = prompt('Nowa kategoria:');
+                        if (newCat) setManualCategory(newCat);
+                      }}
+                      className='px-3 bg-slate-100 rounded-lg text-slate-600 hover:bg-slate-200 font-bold text-xl transition-colors'
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                <div className='space-y-2'>
+                  <label className='block text-sm font-bold text-slate-700'>Poziom trudności</label>
+                  <select
+                    className='w-full p-2 border border-slate-200 rounded-lg bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none'
+                    value={manualDifficulty}
+                    onChange={(e) => setManualDifficulty(e.target.value as Difficulty)}
+                  >
+                    <option value='Junior'>Junior</option>
+                    <option value='Mid'>Mid</option>
+                    <option value='Senior'>Senior</option>
+                  </select>
+                </div>
+                <div className='space-y-2 md:col-span-2'>
+                  <label className='block text-sm font-bold text-slate-700'>Treść pytania</label>
+                  <input
+                    type='text'
+                    className='w-full p-2 border border-slate-200 rounded-lg bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none'
+                    placeholder='Wpisz tutaj swoje pytanie...'
+                    value={manualQuestionText}
+                    onChange={(e) => setManualQuestionText(e.target.value)}
+                  />
+                </div>
+                <div className='space-y-2 md:col-span-2'>
+                  <label className='block text-sm font-bold text-slate-700'>
+                    Poprawna odpowiedź / Oczekiwane punkty (opcjonalnie)
+                  </label>
+                  <textarea
+                    className='w-full min-h-[80px] p-2 border border-slate-200 rounded-lg bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none text-sm'
+                    placeholder='Wymagane pojęcia to m.in...'
+                    value={manualCorrectAnswer}
+                    onChange={(e) => setManualCorrectAnswer(e.target.value)}
+                  />
+                </div>
+                <div className='md:col-span-2 flex justify-end pt-2'>
+                  <button
+                    onClick={handleAddManualQuestion}
+                    disabled={!manualQuestionText.trim()}
+                    className={`px-6 py-2 rounded-lg font-bold shadow-md text-white ${!manualQuestionText.trim() ? 'bg-indigo-400' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                  >
+                    Dodaj pytanie
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
 
         <section className='pt-8 border-t border-slate-200'>
           <h2 className='text-2xl font-black text-slate-800 border-l-4 border-slate-800 pl-4 py-1 mb-4'>

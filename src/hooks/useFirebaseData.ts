@@ -52,7 +52,7 @@ export function useFirebaseData(userUid: string | undefined, isAuthorized: boole
     );
     const unsubHistory = onSnapshot(hQuery, (snap) => {
       const hs: InterviewSession[] = [];
-      snap.forEach((d) => hs.push(d.data() as InterviewSession));
+      snap.forEach((d) => hs.push({ id: d.id, ...(d.data() as InterviewSession) }));
       setHistory(hs);
     });
 
@@ -140,11 +140,20 @@ export function useFirebaseData(userUid: string | undefined, isAuthorized: boole
     }
   };
 
+  const deleteFromHistory = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'interviews', id));
+    } catch (error) {
+      console.error('Failed to delete history item from Firebase', error);
+    }
+  };
+
   return {
     history,
     questions,
     categories,
     saveToHistory,
+    deleteFromHistory,
     handleAddCategory,
     handleUpdateCategoriesList,
     handleDeleteCategory,

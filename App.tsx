@@ -73,7 +73,14 @@ const App: React.FC = () => {
         }
 
         if (view === 'HISTORY') {
-          return <HistoryView history={firebaseData.history} setView={setView} setSession={setSession} />;
+          return (
+            <HistoryView
+              history={firebaseData.history}
+              setView={setView}
+              setSession={setSession}
+              deleteFromHistory={firebaseData.deleteFromHistory}
+            />
+          );
         }
 
         if (view === 'INTERVIEW' && session) {

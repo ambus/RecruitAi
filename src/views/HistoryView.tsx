@@ -6,9 +6,10 @@ interface HistoryViewProps {
   history: InterviewSession[];
   setView: (view: any) => void;
   setSession: (s: InterviewSession) => void;
+  deleteFromHistory: (id: string) => void;
 }
 
-export const HistoryView: React.FC<HistoryViewProps> = ({ history, setView, setSession }) => {
+export const HistoryView: React.FC<HistoryViewProps> = ({ history, setView, setSession, deleteFromHistory }) => {
   return (
     <div className='min-h-screen p-6 md:p-12 max-w-4xl mx-auto'>
       <header className='flex justify-between items-center mb-8'>
@@ -37,7 +38,28 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ history, setView, setS
                   <p className='text-slate-400 text-sm'>{h.candidate.interviewDate}</p>
                 </div>
               </div>
-              <div className='text-xl font-black text-slate-700'>{calculateTotalAverage(h).toFixed(1)}/5</div>
+              <div className='flex items-center gap-4'>
+                <div className='text-xl font-black text-slate-700'>{calculateTotalAverage(h).toFixed(1)}/5</div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm('Czy na pewno chcesz usunąć tę rozmowę z historii?')) {
+                      if (h.id) deleteFromHistory(h.id);
+                    }
+                  }}
+                  className='p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors'
+                  title='Usuń z historii'
+                >
+                  <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                    <path
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                      strokeWidth='2'
+                      d='M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16'
+                    />
+                  </svg>
+                </button>
+              </div>
             </div>
           ))
         ) : (

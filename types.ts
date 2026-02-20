@@ -23,6 +23,7 @@ export interface Candidate {
 }
 
 export interface InterviewSession {
+  id?: string;
   candidate: Candidate;
   scores: Score[];
   isCompleted: boolean;

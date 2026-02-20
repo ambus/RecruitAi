@@ -51,10 +51,16 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
     if (userAiKey) {
       setIsSummarizing(true);
       try {
-        summary = await generateInterviewSummary(userAiKey, session, questions);
+        // Dodajemy timeout zabezpieczający przed zawieszeniem w przypadku braku połączenia
+        summary = await Promise.race([
+          generateInterviewSummary(userAiKey, session, questions),
+          new Promise<string>((_, reject) =>
+            setTimeout(() => reject(new Error('Przekroczono czas oczekiwania na połączenie z AI.')), 20000),
+          ),
+        ]);
       } catch (e: any) {
         console.error(e);
-        summary = 'Wystąpił błąd podczas generowania podsumowania: ' + e.message;
+        summary = 'Podsumowanie niedostępne (brak połączenia z AI lub błąd): ' + (e.message || '');
       }
     }
 

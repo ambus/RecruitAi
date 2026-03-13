@@ -105,6 +105,14 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
     setSession({ ...session, scores: newScores });
   };
 
+  const handleRateComment = (questionId: string, comment: string) => {
+    const existingIdx = session.scores.findIndex((s) => s.questionId === questionId);
+    if (existingIdx < 0) return; // only allowed after rating
+    const newScores = [...session.scores];
+    newScores[existingIdx] = { ...newScores[existingIdx], comment };
+    setSession({ ...session, scores: newScores });
+  };
+
   const handleUpdateOverallComment = (comment: string) => {
     setSession({ ...session, overallComment: comment });
   };
@@ -244,13 +252,26 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
                       </div>
                     </div>
                     {isExpanded && (
-                      <div className='px-5 py-4 bg-slate-50 border-t border-slate-100'>
+                      <div className='px-5 py-4 bg-slate-50 border-t border-slate-100 space-y-3'>
                         <p className='text-slate-600 italic'>
                           <span className='text-xs font-black text-blue-600 uppercase block mb-1'>
                             Prawidłowa odpowiedź:
                           </span>
                           {q.correctAnswer}
                         </p>
+                      </div>
+                    )}
+                    {score && score.rating > 0 && (
+                      <div className='px-5 py-3 bg-amber-50 border-t border-amber-100'>
+                        <label className='text-xs font-black text-amber-700 uppercase block mb-1'>
+                          Komentarz do odpowiedzi kandydata (opcjonalnie):
+                        </label>
+                        <textarea
+                          className='w-full min-h-[60px] p-2 bg-white border border-amber-200 rounded-lg outline-none focus:ring-2 focus:ring-amber-400 transition-all text-slate-700 text-sm resize-none'
+                          placeholder='Np. kandydat wymienił X ale pominął Y, odpowiedź była niepewna...'
+                          value={score.comment || ''}
+                          onChange={(e) => handleRateComment(q.id, e.target.value)}
+                        />
                       </div>
                     )}
                   </div>

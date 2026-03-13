@@ -16,6 +16,7 @@ export async function generateInterviewSummary(
       question: q?.question || 'Pytanie usunięte',
       rating: s.rating,
       difficulty: q?.difficulty || 'Niekreślony',
+      ...(s.comment ? { recruiterComment: s.comment } : {}),
     };
   });
 
@@ -23,14 +24,14 @@ export async function generateInterviewSummary(
 
   const prompt = `
     Działaj jako senior tech lead. Przeprowadziłeś rozmowę techniczną z kandydatem o imieniu ${session.candidate.name}.
-    Poniżej znajdują się wyniki z podziałem na pytania, ich poziom trudności i oceny (w skali 1-5):
+    Poniżej znajdują się wyniki z podziałem na pytania, ich poziom trudności, oceny (w skali 1-5) oraz – jeśli dostępne – komentarze rekrutera do konkretnej odpowiedzi kandydata (pole "recruiterComment"):
     ${JSON.stringify(scoredData, null, 2)}
 
     ${session.overallComment ? `Rekruter dodał następujące uwagi ogólne z rozmowy: "${session.overallComment}"` : ''}
 
     Przygotuj profesjonalne podsumowanie rozmowy w języku polskim.
     Podsumowanie musi zawierać:
-    1. Krótką ocenę ogólną (uwzględniając poziomy trudności pytań oraz uwagi rekrutera).
+    1. Krótką ocenę ogólną (uwzględniając poziomy trudności pytań, komentarze rekrutera do poszczególnych odpowiedzi oraz ogólne uwagi rekrutera).
     2. Szczegółową analizę dla każdej z ocenianych kategorii: ${usedCategories.join(', ')}.
     3. Rekomendację (Zatrudnić / Nie zatrudnić / Kolejny etap).
     4. Główne mocne strony i obszary do poprawy.

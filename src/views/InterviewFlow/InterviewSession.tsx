@@ -223,8 +223,41 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
               {category.questions.map((q) => {
                 const score = session.scores.find((s) => s.questionId === q.id);
                 const isExpanded = expandedQuestion === q.id;
+                const isTask = q.type === 'task';
                 return (
-                  <div key={q.id} className='bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm'>
+                  <div
+                    key={q.id}
+                    className={`border rounded-xl overflow-hidden shadow-sm ${isTask ? 'bg-orange-50 border-orange-200' : 'bg-white border-slate-200'}`}
+                  >
+                    {/* Task header banner */}
+                    {isTask && (
+                      <div className='bg-orange-500 text-white px-5 py-2 flex items-center justify-between gap-4'>
+                        <span className='font-black text-sm uppercase tracking-wider flex items-center gap-2'>
+                          🔧 Zadanie Praktyczne
+                        </span>
+                        {q.taskLink && (
+                          <button
+                            type='button'
+                            onClick={() => {
+                              navigator.clipboard.writeText(q.taskLink!);
+                              alert('Link skopiowany do schowka!');
+                            }}
+                            className='flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white text-xs font-bold px-3 py-1 rounded-lg transition-colors'
+                          >
+                            <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                              <path
+                                strokeLinecap='round'
+                                strokeLinejoin='round'
+                                strokeWidth='2'
+                                d='M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z'
+                              />
+                            </svg>
+                            Kopiuj link
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     <div className='p-5 flex flex-col md:flex-row md:items-center justify-between gap-4'>
                       <div className='flex-1 pr-4 flex flex-wrap items-center gap-3'>
                         <span
@@ -251,16 +284,42 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
                         </button>
                       </div>
                     </div>
-                    {isExpanded && (
-                      <div className='px-5 py-4 bg-slate-50 border-t border-slate-100 space-y-3'>
-                        <p className='text-slate-600 italic'>
-                          <span className='text-xs font-black text-blue-600 uppercase block mb-1'>
-                            Prawidłowa odpowiedź:
-                          </span>
-                          {q.correctAnswer}
+
+                    {/* Task description (shown inline, always visible) */}
+                    {isTask && q.taskDescription && (
+                      <div className='px-5 pb-4'>
+                        <p className='text-sm font-black text-orange-700 uppercase mb-1'>Co należy zrobić:</p>
+                        <p className='text-slate-700 text-sm whitespace-pre-wrap bg-white border border-orange-100 rounded-lg p-3'>
+                          {q.taskDescription}
                         </p>
                       </div>
                     )}
+
+                    {/* Expanded: answer for question, solution for task */}
+                    {isExpanded && (
+                      <div className='px-5 py-4 bg-slate-50 border-t border-slate-100 space-y-3'>
+                        {isTask ? (
+                          q.taskSolution ? (
+                            <p className='text-slate-600 italic'>
+                              <span className='text-xs font-black text-orange-600 uppercase block mb-1'>
+                                Optymalne rozwiązanie:
+                              </span>
+                              <code className='block whitespace-pre-wrap font-mono text-sm'>{q.taskSolution}</code>
+                            </p>
+                          ) : (
+                            <p className='text-xs text-slate-400 italic'>Brak wzorcowego rozwiązania.</p>
+                          )
+                        ) : (
+                          <p className='text-slate-600 italic'>
+                            <span className='text-xs font-black text-blue-600 uppercase block mb-1'>
+                              Prawidłowa odpowiedź:
+                            </span>
+                            {q.correctAnswer}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     {score && score.rating > 0 && (
                       <div className='px-5 py-3 bg-amber-50 border-t border-amber-100'>
                         <label className='text-xs font-black text-amber-700 uppercase block mb-1'>
@@ -278,6 +337,7 @@ export const InterviewSessionView: React.FC<InterviewSessionViewProps> = ({
                 );
               })}
             </div>
+
           </section>
         ))}
 

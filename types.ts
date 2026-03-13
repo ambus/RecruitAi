@@ -8,6 +8,14 @@ export interface Question {
   isPrivate?: boolean;
   createdBy?: string;
   difficulty?: Difficulty;
+  /** 'question' (default) or 'task' for practical coding/live tasks */
+  type?: 'question' | 'task';
+  /** Only for type === 'task': a URL the candidate can open */
+  taskLink?: string;
+  /** Only for type === 'task': what the candidate should do */
+  taskDescription?: string;
+  /** Only for type === 'task': what the optimal solution looks like */
+  taskSolution?: string;
 }
 
 export interface Score {

@@ -104,7 +104,9 @@ export const QuestionsMgmtView: React.FC<QuestionsMgmtViewProps> = ({
 
   const onSaveQuestionClick = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingQuestion?.question || !editingQuestion?.category || !editingQuestion?.correctAnswer) return;
+    const isTask = editingQuestion?.type === 'task';
+    if (!editingQuestion?.question || !editingQuestion?.category) return;
+    if (!isTask && !editingQuestion?.correctAnswer) return;
     await handleSaveQuestion(editingQuestion);
     setEditingQuestion(null);
   };
@@ -192,7 +194,13 @@ export const QuestionsMgmtView: React.FC<QuestionsMgmtViewProps> = ({
             Kategorie
           </button>
           <button
-            onClick={() => setEditingQuestion({ category: categories[0] || '', isPrivate: false, difficulty: 'Mid' })}
+            onClick={() => setEditingQuestion({ category: categories[0] || '', isPrivate: false, difficulty: 'Mid', type: 'task' })}
+            className='px-6 py-2 bg-orange-500 text-white font-bold rounded-lg hover:bg-orange-600 transition-colors shadow-md flex items-center gap-2'
+          >
+            <span>🔧</span> Zadanie
+          </button>
+          <button
+            onClick={() => setEditingQuestion({ category: categories[0] || '', isPrivate: false, difficulty: 'Mid', type: 'question' })}
             className='px-6 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors shadow-md'
           >
             + Pytanie
@@ -435,11 +443,54 @@ export const QuestionsMgmtView: React.FC<QuestionsMgmtViewProps> = ({
       )}
 
       {editingQuestion && (
-        <div className='fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4'>
-          <div className='bg-white rounded-2xl shadow-2xl p-8 w-full max-w-lg'>
-            <h3 className='text-2xl font-bold mb-6 text-slate-800'>
-              {editingQuestion.id ? 'Edytuj Pytanie' : 'Nowe Pytanie'}
-            </h3>
+        <div className='fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto'>
+          <div className='bg-white rounded-2xl shadow-2xl p-8 w-full max-w-lg my-auto'>
+            {/* Header – type indicator */}
+            <div className='flex items-center gap-3 mb-6'>
+              {editingQuestion.type === 'task' ? (
+                <span className='text-2xl'>🔧</span>
+              ) : (
+                <span className='text-2xl'>❓</span>
+              )}
+              <h3 className='text-2xl font-bold text-slate-800'>
+                {editingQuestion.id
+                  ? editingQuestion.type === 'task'
+                    ? 'Edytuj Zadanie'
+                    : 'Edytuj Pytanie'
+                  : editingQuestion.type === 'task'
+                    ? 'Nowe Zadanie Praktyczne'
+                    : 'Nowe Pytanie'}
+              </h3>
+            </div>
+
+            {/* Type switcher (only for new items) */}
+            {!editingQuestion.id && (
+              <div className='flex gap-2 mb-5 p-1 bg-slate-100 rounded-xl'>
+                <button
+                  type='button'
+                  onClick={() => setEditingQuestion({ ...editingQuestion, type: 'question' })}
+                  className={`flex-1 py-2 rounded-lg font-bold text-sm transition-colors ${
+                    editingQuestion.type !== 'task'
+                      ? 'bg-white shadow text-blue-700'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  ❓ Pytanie
+                </button>
+                <button
+                  type='button'
+                  onClick={() => setEditingQuestion({ ...editingQuestion, type: 'task' })}
+                  className={`flex-1 py-2 rounded-lg font-bold text-sm transition-colors ${
+                    editingQuestion.type === 'task'
+                      ? 'bg-white shadow text-orange-600'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  🔧 Zadanie Praktyczne
+                </button>
+              </div>
+            )}
+
             <form onSubmit={onSaveQuestionClick} className='space-y-4'>
               <div className='grid grid-cols-2 gap-4'>
                 <div>
@@ -473,24 +524,78 @@ export const QuestionsMgmtView: React.FC<QuestionsMgmtViewProps> = ({
                   </select>
                 </div>
               </div>
-              <div>
-                <label className='block text-sm font-medium text-slate-600 mb-1'>Pytanie</label>
-                <textarea
-                  className='w-full px-4 py-2 border border-slate-200 rounded-lg min-h-[80px] bg-white text-slate-900'
-                  value={editingQuestion.question || ''}
-                  required
-                  onChange={(e) => setEditingQuestion({ ...editingQuestion, question: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className='block text-sm font-medium text-slate-600 mb-1'>Odpowiedź</label>
-                <textarea
-                  className='w-full px-4 py-2 border border-slate-200 rounded-lg min-h-[80px] bg-white text-slate-900'
-                  value={editingQuestion.correctAnswer || ''}
-                  required
-                  onChange={(e) => setEditingQuestion({ ...editingQuestion, correctAnswer: e.target.value })}
-                />
-              </div>
+
+              {/* ── QUESTION fields ── */}
+              {editingQuestion.type !== 'task' && (
+                <>
+                  <div>
+                    <label className='block text-sm font-medium text-slate-600 mb-1'>Pytanie</label>
+                    <textarea
+                      className='w-full px-4 py-2 border border-slate-200 rounded-lg min-h-[80px] bg-white text-slate-900'
+                      value={editingQuestion.question || ''}
+                      required
+                      onChange={(e) => setEditingQuestion({ ...editingQuestion, question: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className='block text-sm font-medium text-slate-600 mb-1'>Odpowiedź</label>
+                    <textarea
+                      className='w-full px-4 py-2 border border-slate-200 rounded-lg min-h-[80px] bg-white text-slate-900'
+                      value={editingQuestion.correctAnswer || ''}
+                      required
+                      onChange={(e) => setEditingQuestion({ ...editingQuestion, correctAnswer: e.target.value })}
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* ── TASK fields ── */}
+              {editingQuestion.type === 'task' && (
+                <>
+                  <div>
+                    <label className='block text-sm font-medium text-slate-600 mb-1'>Tytuł / Treść zadania</label>
+                    <textarea
+                      className='w-full px-4 py-2 border border-slate-200 rounded-lg min-h-[60px] bg-white text-slate-900'
+                      placeholder='np. Zaimplementuj funkcję debounce...'
+                      value={editingQuestion.question || ''}
+                      required
+                      onChange={(e) => setEditingQuestion({ ...editingQuestion, question: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className='block text-sm font-medium text-slate-600 mb-1'>
+                      Link do zadania
+                      <span className='text-slate-400 font-normal ml-1'>(do skopiowania przez rekrutera)</span>
+                    </label>
+                    <input
+                      type='url'
+                      className='w-full px-4 py-2 border border-slate-200 rounded-lg bg-white text-slate-900'
+                      placeholder='https://codesandbox.io/...'
+                      value={editingQuestion.taskLink || ''}
+                      onChange={(e) => setEditingQuestion({ ...editingQuestion, taskLink: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className='block text-sm font-medium text-slate-600 mb-1'>Opis – co należy zrobić</label>
+                    <textarea
+                      className='w-full px-4 py-2 border border-slate-200 rounded-lg min-h-[80px] bg-white text-slate-900'
+                      placeholder='Opisz szczegółowo co kandydat powinien zaimplementować...'
+                      value={editingQuestion.taskDescription || ''}
+                      onChange={(e) => setEditingQuestion({ ...editingQuestion, taskDescription: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className='block text-sm font-medium text-slate-600 mb-1'>Optymalne rozwiązanie</label>
+                    <textarea
+                      className='w-full px-4 py-2 border border-slate-200 rounded-lg min-h-[100px] bg-white text-slate-900 font-mono text-sm'
+                      placeholder='Przykładowe / wzorcowe rozwiązanie...'
+                      value={editingQuestion.taskSolution || ''}
+                      onChange={(e) => setEditingQuestion({ ...editingQuestion, taskSolution: e.target.value })}
+                    />
+                  </div>
+                </>
+              )}
+
               <div className='flex items-center gap-2'>
                 <input
                   type='checkbox'
@@ -504,7 +609,12 @@ export const QuestionsMgmtView: React.FC<QuestionsMgmtViewProps> = ({
                 </label>
               </div>
               <div className='flex gap-4 pt-4'>
-                <button type='submit' className='flex-1 bg-blue-600 text-white font-bold py-3 rounded-lg'>
+                <button
+                  type='submit'
+                  className={`flex-1 text-white font-bold py-3 rounded-lg ${
+                    editingQuestion.type === 'task' ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'
+                  }`}
+                >
                   Zapisz
                 </button>
                 <button
@@ -533,6 +643,11 @@ export const QuestionsMgmtView: React.FC<QuestionsMgmtViewProps> = ({
                   className='bg-white p-5 rounded-xl border border-slate-200 flex justify-between items-center group'
                 >
                   <div className='flex-1 pr-8 flex flex-wrap items-center gap-3'>
+                    {q.type === 'task' && (
+                      <span className='bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-[10px] font-black uppercase flex items-center gap-1 shrink-0 border border-orange-200'>
+                        🔧 Zadanie
+                      </span>
+                    )}
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase border ${difficultyColor(q.difficulty)}`}
                     >
